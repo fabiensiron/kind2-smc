@@ -812,9 +812,11 @@ end
 (** {2 SMC flags} *)
 module SMC : sig
 
-  (** Run number of steps, override the number of steps given in the input
-      file. *)
+  (** Run number of steps, override the number of steps given in the input file. *)
   val steps : unit -> int
+
+  (** Seed to initialize the random engine. *)
+  val seed : unit -> int option
 
   (** Number of independant random runs. *)
   val runs : unit -> int

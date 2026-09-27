@@ -2676,6 +2676,20 @@ module SMC = struct
     )
   let steps () = !steps
 
+  let seed_default = None
+  let seed = ref seed_default
+  let _ = add_spec
+      "--smc_seed"
+      (Arg.Int (fun i -> seed := Some i))
+      (fun fmt ->
+         Format.fprintf fmt
+           "@[<v>\
+            Run number of steps, override the number of steps given in the@ \
+            input file@ \
+            @]"
+      )
+  let seed () = !seed
+
   let runs_default = 10
   let runs = ref runs_default
   let _ = add_spec

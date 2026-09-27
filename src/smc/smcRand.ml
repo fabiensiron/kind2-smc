@@ -22,7 +22,11 @@ let real_min = ref (-1000.0)
 let real_max = ref 1000.0
 
 let init () =
-  Random.self_init () (* TODO: add a --smc_seed option *);
+  begin
+    match Flags.SMC.seed () with
+    | Some seed -> Random.init seed
+    | None -> Random.self_init ()
+  end;
 
   int_min := Flags.SMC.int_min ();
   int_max := Flags.SMC.int_max ();
