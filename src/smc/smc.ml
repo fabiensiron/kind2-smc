@@ -18,7 +18,9 @@
 
 (*./kind2 --enable interpreter --debug smt --debug parse microwave.lus*)
 open Lib
+open Actlit
 
+module Rand = SmcRand
 
 (* Solver instance if created *)
 let ref_solver = ref None
@@ -40,46 +42,53 @@ let on_exit _ =
          "Error deleting solver_init: %s" 
          (Printexc.to_string e))
 
+(* Statistics environment and display *)
+module Statistics = struct
+  module V = Map.Make(String)
+  type t =
+    {
+      mutable generated : int;
+      mutable accepted : int;
+      mutable rejected : int;
+      mutable violations : int V.t;
+    }
 
+  let init props =
+    let s =
+      {
+        generated = 0;
+        accepted = 0;
+        rejected = 0;
+        violations = V.empty;
+      }
+    in
+    List.fold_left (fun s (name, _, _) ->
+        { s with violations = V.add name 0 s.violations }
+      )
+      s props
 
-module Rand = struct
-  let default_int_min = -1000
-  let default_int_max = 1000
-  let default_real_min = -1000.0
-  let default_real_max = 1000.0
+  let add_violations s vs =
+    let vs =
+      List.fold_left (fun vs (name, _) ->
+          let update v = Some (succ @@ try Option.get v with _ -> 0) in
+          V.update name update vs
+        ) s.violations vs in
+    s.violations <- vs
 
-  let init () = Random.self_init () (* TODO: add a --smc_seed option *)
-
-  let random_real min max =
-    min +. Random.float (max -. min)
-
-  let random_int min max =
-    Random.int_in_range ~min ~max
-
-  let random_bool () =
-    Random.bool ()
-
-  let random_value ty =
-    match Type.node_of_type ty with
-    | Type.Bool -> random_bool () |> Term.mk_bool
-    | Type.Int ->
-      random_int default_int_min default_int_max |> Numeral.of_int |> Term.mk_num
-    | Type.IntRange (Some lb, Some ub) ->
-      random_int (Numeral.to_int lb) (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
-    | Type.IntRange (None, Some ub) ->
-      random_int default_int_min (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
-    | Type.IntRange (Some lb, None) ->
-      random_int (Numeral.to_int lb) default_int_max |> Numeral.of_int |> Term.mk_num
-    | Type.Enum (lb, ub) ->
-      random_int (Numeral.to_int lb) (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
-    | Type.Real ->
-      random_real default_real_min default_real_max
-      |> Printf.sprintf "%.17g" |> Decimal.of_string |> Term.mk_dec
-    | _ ->
-      failwith
-        (Format.asprintf
-           "SMC: unsupported input type %a" Type.pp_print_type ty)
-
+  let pp fmt s =
+    Format.fprintf fmt "@[<v>- SMC samples: generated=%d accepted=%d rejected=%d"
+      s.generated s.accepted s.rejected;
+    if s.accepted > 0 then
+      Format.fprintf fmt
+        "@,%a"
+        (Format.pp_print_list
+           ~pp_sep:(fun fmt () -> Format.fprintf fmt "@,")
+           (fun fmt (name, cnt) ->
+              let probability = float_of_int cnt /. float_of_int s.accepted in
+              Format.fprintf fmt "- SMC property %s: violations=%d/%d, p~=%g"
+                name cnt s.accepted probability))
+        (V.to_list s.violations);
+    Format.fprintf fmt "@]"
 end
 
 (* Assert transition relation for all steps below [i] *)
@@ -94,7 +103,7 @@ let rec assert_trans solver t i =
       assert_trans solver t Numeral.(i - one)
     end
 
-let assert_input solver state_var instant value =
+let build_input_equation state_var instant value =
   let var =
     Var.mk_state_var_instance
       state_var
@@ -102,23 +111,24 @@ let assert_input solver state_var instant value =
     |> Term.mk_var
   in
 
-  Term.mk_eq [var; value] |> SMTSolver.assert_term solver
+  Term.mk_eq [var; value]
 
-let assert_random_inputs solver inputs steps =
+let build_random_input_equations inputs steps =
+  let equations = ref [] in
   List.iter
     (fun state_var ->
        if StateVar.is_const state_var then
          let value = state_var |> StateVar.type_of_state_var |> Rand.random_value in
          for instant = 0 to steps - 1 do
-           assert_input solver state_var instant value
+           equations := build_input_equation state_var instant value :: !equations
          done
        else
          for instant = 0 to steps - 1 do
            let value = state_var |> StateVar.type_of_state_var |> Rand.random_value in
-           assert_input solver state_var instant value
+           equations := build_input_equation state_var instant value :: !equations
          done
-    )
-    inputs
+    ) inputs;
+  !equations
 
 let invariant_properties trans_sys =
   TransSys.props_list_of_bound_no_skip
@@ -130,41 +140,95 @@ let invariant_properties trans_sys =
        | Property.Invariant -> true
        | _ -> false)
 
-let evaluate_properties trans_sys model steps =
-  let properties = invariant_properties trans_sys in
-  let eval term = Eval.eval_term
-      (TransSys.uf_defs trans_sys)
-      model
-      term
-    |> Eval.bool_of_value
+let build_property_terms trans_sys steps =
+  invariant_properties trans_sys
+  |> List.fold_left
+    (fun acc (name, prop) ->
+       let rec add_instant instant acc =
+         if instant >= steps then acc
+         else
+           let term = Term.bump_state (Numeral.of_int instant) prop in
+           add_instant
+             (instant + 1)
+             ((name, instant, term) :: acc)
+       in
+       add_instant 0 acc)
+    []
+
+module S = Set.Make(String)
+
+let violations_of_values props values =
+  let pset = ref S.empty in
+  List.fold_left
+    (fun acc (name, instant, term) ->
+       let value_opt =
+         List.find_opt
+           (fun (queried_term, _) ->
+              Term.equal queried_term term)
+           values in
+       let (_, value) =
+         try Option.get value_opt
+         with _ ->
+           failwith (Format.asprintf "SMC: solver did not return a value for property term %a"
+                       Term.pp_print_term term) in
+       if Term.equal value Term.t_false then
+         (* TODO: handle step violations *)
+         if not @@ S.mem name !pset then
+           (pset := S.add name !pset; (name, instant) :: acc)
+         else acc
+       else if Term.equal value Term.t_true then
+         acc
+       else
+         failwith
+           (Format.asprintf
+              "SMC: property %s did not evaluate to a Boolean" name)
+    )
+    []
+    props
+
+type run_result =
+  | Accepted of (string * int) list
+  | Rejected
+
+let run_one solver inputs steps properties =
+  (* Build random input equations *)
+  let input_equations = build_random_input_equations inputs steps in
+
+  (* Build and assert input term using activation litterals *)
+  let actlit_uf = fresh_actlit () in
+  SMTSolver.declare_fun solver actlit_uf;
+  let actlit = term_of_actlit actlit_uf in
+  Term.mk_implies [actlit; Term.mk_and input_equations]
+  |> SMTSolver.assert_term solver;
+
+  (* Solver continuations *)
+  let if_sat _solver values =
+    let violations =
+      violations_of_values
+        properties
+        values in
+    Accepted violations
   in
-  List.map
-    (fun (name, property) ->
-       let violated_at = ref None in
+  let if_unsat _solver = Rejected in
+  let result =
+    if properties = [] then
+      SMTSolver.check_sat_assuming
+        solver
+        (fun _solver -> Accepted [])
+        if_unsat
+        [actlit]
+    else
+      SMTSolver.check_sat_assuming_and_get_term_values
+        solver
+        if_sat
+        if_unsat
+        [actlit]
+        (List.map (fun (_, _, term) -> term) properties) in
 
-       for instant = 0 to steps - 1 do
-         match !violated_at with
-         | Some _ -> ()
-         | None ->
-           let property_at_instant =
-             Term.bump_state (Numeral.of_int instant) property in
-           if not @@ eval property_at_instant then
-             violated_at := Some instant
-       done ;
-       (name, !violated_at))
-  properties
+  (* Deactivate input trace using action litteral *)
+  Term.mk_not actlit |> SMTSolver.assert_term solver;
+  result
 
-let print_property_results results =
-  List.iter
-    (fun (name, violated_at) ->
-       match violated_at with
-       | None ->
-         KEvent.log L_info
-           "SMC property %s: satisfied on this trace" name
-       | Some instant ->
-         KEvent.log L_info
-           "SMC property %s: violated at k=%d" name instant)
-    results
 
 (* Main entry point *)
 let main  (* input_file *) input_sys _ trans_sys =
@@ -182,7 +246,15 @@ let main  (* input_file *) input_sys _ trans_sys =
   if steps <= 0 then
     invalid_arg "SMC: number of steps must be strictly positive";
 
-  KEvent.log L_info "SMC running up to k=%d" steps;
+  let runs = Flags.SMC.runs () in
+
+  if runs <= 0 then
+    invalid_arg "SMC: number of runs must be strictly positive";
+
+  KEvent.log L_info "SMC: %d runs of %d steps" runs steps;
+
+  let properties = build_property_terms trans_sys steps in
+  let stats = Statistics.init properties in
 
   (* Determine logic for the SMT solver *)
   let logic = TransSys.get_logic trans_sys in
@@ -214,44 +286,33 @@ let main  (* input_file *) input_sys _ trans_sys =
   (* Assert transition relation up to number of steps *)
   assert_trans solver trans_sys (Numeral.of_int steps);
 
-  (* Assert random inputs *)
-  assert_random_inputs solver inputs steps;
+  let run = ref 0 in
+  while stats.accepted < runs do
+    run := !run + 1;
+    stats.generated <- stats.generated + 1;
 
-  if SMTSolver.check_sat solver then
-    begin
-      KEvent.log L_info "SMC: sampled trace accepted";
+    if !run mod 1000 = 0 then
+      KEvent.progress stats.accepted;
 
-      let model = SMTSolver.get_var_values
-          solver
-          (TransSys.get_state_var_bounds trans_sys)
-          (TransSys.vars_of_bounds trans_sys
-             Numeral.zero (Numeral.of_int steps)) in
-
-      let property_results = evaluate_properties trans_sys model steps in
-
-      print_property_results property_results;
-
-      (* Extract execution path from model *)
-      let path = 
-        Model.path_from_model 
-          (TransSys.state_vars trans_sys)
-          model
-          Numeral.(pred (of_int steps))
-      in
-
-      (* Output execution path *)
-      KEvent.execution_path
-        ~full_contract:false (* contract_monitor *)
-        input_sys
-        trans_sys 
-        (Model.path_to_list path);
-    end
-  else
-    begin
-      KEvent.log L_info "SMC: sampled trace rejected (infeasible)"
-    end
-
-
+    match run_one solver inputs steps properties with
+    | Rejected ->
+      (* Trace is rejected because of transition system constraints. *)
+      stats.rejected <- stats.rejected + 1
+    | Accepted [] ->
+      (* Trace is accepted without any violation. *)
+      stats.accepted <- stats.accepted + 1
+    | Accepted violations ->
+      (* Trace is accepted without having one or multiple property violation detected. *)
+      stats.accepted <- stats.accepted + 1;
+      Statistics.add_violations stats violations
+  done;
+  let log = Format.asprintf "@[%a@]\n" Statistics.pp stats in
+  Printf.printf "Statistical Model-Checking Result:\n\n%s" log;
+(*
+   KEvent.log L_warn
+     "@[<v>Statistical Model-Checking Result:@,@,%a@]"
+     Statistics.pp stats
+*)
 (* 
    Local Variables:
    compile-command: "make -C .. -k"

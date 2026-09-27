@@ -815,6 +815,9 @@ module SMC : sig
   (** Run number of steps, override the number of steps given in the input
       file. *)
   val steps : unit -> int
+
+  (** Number of independant random runs. *)
+  val runs : unit -> int
 end
 
 (** {2 LSP flags} *)

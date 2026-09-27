@@ -2676,6 +2676,18 @@ module SMC = struct
     )
   let steps () = !steps
 
+  let runs_default = 10
+  let runs = ref runs_default
+  let _ = add_spec
+    "--smc_runs"
+    (Arg.Set_int runs)
+    (fun fmt ->
+      Format.fprintf fmt
+        "@[<v>\
+          Number of independant random runs
+        @]"
+    )
+  let runs () = !runs
 end
 
 (* Interpreter flags. *)
