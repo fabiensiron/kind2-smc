@@ -207,16 +207,12 @@ type run_result =
  * Hence accepted traces are distributed according to the base
  * distribution conditioned on feasibility over the complete horizon.
  *)
-let run_one solver ranges inputs steps properties =
+let run_one solver run ranges inputs steps properties =
   (* Build random input equations *)
   let input_equations = build_random_input_equations ranges inputs steps in
 
-  (* Build and assert input term using activation litterals *)
-  let actlit_uf = fresh_actlit () in
-  SMTSolver.declare_fun solver actlit_uf;
-  let actlit = term_of_actlit actlit_uf in
-  Term.mk_implies [actlit; Term.mk_and input_equations]
-  |> SMTSolver.assert_term solver;
+  SMTSolver.push solver;
+  SMTSolver.assert_term solver @@ Term.mk_and input_equations;
 
   (* Solver continuations *)
   let if_sat _solver values =
@@ -227,23 +223,27 @@ let run_one solver ranges inputs steps properties =
     Accepted violations
   in
   let if_unsat _solver = Rejected in
+  let _start = Unix.gettimeofday () in
   let result =
     if properties = [] then
       SMTSolver.check_sat_assuming
         solver
         (fun _solver -> Accepted [])
         if_unsat
-        [actlit]
+        [Term.mk_true ()] (*[actlit]*)
     else
-      SMTSolver.check_sat_assuming_and_get_term_values
+      SMTSolver.check_sat_and_get_term_values
         solver
         if_sat
         if_unsat
-        [actlit]
         (List.map (fun (_, _, term) -> term) properties) in
+  let _stop = Unix.gettimeofday () in
 
-  (* Deactivate input trace using action litteral *)
-  Term.mk_not actlit |> SMTSolver.assert_term solver;
+  (*
+  KEvent.log L_debug
+    "SMC run %d: %.6fs"
+    run
+    (stop -. start); *)
   result
 
 
@@ -332,7 +332,7 @@ let main  (* input_file *) input_sys _ trans_sys =
     if !run mod 1000 = 0 then
       KEvent.progress @@ Report.accepted !statistics;
 
-    match run_one solver input_ranges inputs steps properties with
+    match run_one solver !run input_ranges inputs steps properties with
     | Rejected ->
       (* Trace is rejected because of transition system constraints. *)
       statistics := Report.inc_rejected !statistics
