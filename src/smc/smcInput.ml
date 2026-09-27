@@ -16,151 +16,226 @@
 
 *)
 
+module SMap = Map.Make(String)
 
-module LA = LustreAst
-module HMap = HString.HStringMap
+type distribution =
+  | Uniform
+  | Bernoulli of float
+  | UniformInt of int * int
+  | UniformReal of float * float
 
-let hstring_equal x y =
-  HString.compare x y = 0
+type t =
+  | Fixed of Yojson.Safe.t
+  | Distribution of distribution
 
-(* Collect non-parameterized type aliases from the original AST. *)
-let type_aliases ast =
-  List.fold_left
-    (fun aliases -> function
-       | LA.TypeDecl
-           (_, LA.AliasType (_, name, [], ty)) ->
-         HMap.add name ty aliases
-       | _ ->
-         aliases)
-    HMap.empty
-    ast
+type env = t SMap.t
+
+let empty = SMap.empty
+
+let find_opt = SMap.find_opt
+
+let iter = SMap.iter
+
+let bindings = SMap.bindings
+
+let error file fmt =
+  Format.kasprintf
+    (fun message ->
+       invalid_arg
+         (Format.asprintf
+            "SMC input file %s: %s"
+            file
+            message))
+    fmt
 
 
-(* Expand aliases such as:
-
-     type Digit = subrange [0,9] of int;
-*)
-let rec expand_type_alias aliases = function
-  | LA.UserType (_, [], name) as ty ->
+let json_number_as_float file field = function
+  | `Float value -> value
+  | `Int value -> float_of_int value
+  | `Intlit value
+  | `String value ->
     begin
-      match HMap.find_opt name aliases with
-      | Some ty ->
-        expand_type_alias aliases ty
-
-      | None ->
-        ty
+      try
+        float_of_string value
+      with Failure _ ->
+        error file "field %S must be a floating-point number" field
     end
-  | ty -> ty
+  | _ -> error file "field %S must be a floating-point number" field
 
-let int_of_ast_expr = function
-  | LA.Const (_, LA.Num n) ->
-    int_of_string_opt
-      (HString.string_of_hstring n)
-  | LA.UnaryOp
-      (_, LA.Uminus,
-       LA.Const (_, LA.Num n)) ->
-    Option.map
-      (fun n -> -n)
-      (int_of_string_opt
-         (HString.string_of_hstring n))
-  | _ -> None
 
-let int_range_of_type aliases ty =
-  let ty =
-    expand_type_alias aliases ty
+let json_number_as_int file field = function
+  | `Int value -> value
+  | `Intlit value
+  | `String value ->
+    begin
+      try
+        int_of_string value
+      with Failure _ ->
+        error file "field %S must be an integer" field
+    end
+  | _ -> error file "field %S must be an integer" field
+
+
+let field file name fields =
+  match List.assoc_opt name fields with
+  | Some value -> value
+  | None -> error file "missing field %S in distribution" name
+
+
+let string_field file name fields =
+  match field file name fields with
+  | `String value -> value
+  | _ -> error file "field %S must be a string" name
+
+
+let check_probability file p =
+  if p < 0.0 || p > 1.0 then
+    error file "Bernoulli probability must belong to [0,1], got %g" p
+
+
+let parse_distribution file fields =
+  match string_field file "distribution" fields with
+  | "uniform" ->
+    Distribution Uniform
+
+  | "bernoulli" ->
+    let p = field file "p" fields |> json_number_as_float file "p" in
+    check_probability file p;
+    Distribution (Bernoulli p)
+
+  | "uniform_int" ->
+    let lower = field file "min" fields |> json_number_as_int file "min" in
+    let upper = field file "max" fields |> json_number_as_int file "max" in
+
+    if lower > upper then
+      error file
+        "invalid uniform_int interval [%d,%d]"
+        lower upper;
+
+    Distribution (UniformInt (lower, upper))
+
+  | "uniform_real" ->
+    let lower = field file "min" fields |> json_number_as_float file "min" in
+    let upper = field file "max" fields |> json_number_as_float file "max" in
+
+    if lower > upper then
+      error file
+        "invalid uniform_real interval [%g,%g]"
+        lower upper;
+
+    Distribution (UniformReal (lower, upper))
+
+  | distribution ->
+    error file
+      "unknown distribution %S"
+      distribution
+
+
+let parse_spec file json_entry =
+  match json_entry with
+  (* A JSON object denotes a stochastic generator. *)
+  | `Assoc fields ->
+    parse_distribution file fields
+  (* Scalar values denote fixed values. *)
+  | (`Bool _ | `Int _ | `Intlit _ | `Float _ | `String _) as value ->
+    Fixed value
+  | value ->
+    error file
+      "invalid input specification %s"
+      (Yojson.Safe.to_string value)
+
+
+let of_file file =
+  let json =
+    try
+      Yojson.Safe.from_file file
+    with
+    | Sys_error msg -> error file "%s" msg
+    | Yojson.Json_error msg -> error file "%s" msg
   in
 
-  match ty with
-  (* [lower, upper] *)
-  | LA.RefinementType
-      (_, (_, id, LA.Int _),
-       LA.BinaryOp
-         (_, LA.And,
-          LA.CompOp
-            (_, LA.Lte,
-             lower,
-             LA.Ident (_, id1)),
-          LA.CompOp
-            (_, LA.Lte,
-             LA.Ident (_, id2),
-             upper)))
-    when hstring_equal id id1
-      && hstring_equal id id2 ->
-    begin
-      match int_of_ast_expr lower, int_of_ast_expr upper with
-      | Some lower, Some upper -> Some (Some lower, Some upper)
-      | _ -> None
-    end
-
-  (* [lower, *] *)
-  | LA.RefinementType
-      (_, (_, id, LA.Int _),
-       LA.CompOp
-         (_, LA.Lte,
-          lower,
-          LA.Ident (_, id1)))
-    when hstring_equal id id1 ->
-    begin
-      match int_of_ast_expr lower with
-      | Some lower -> Some (Some lower, None)
-      | None -> None
-    end
-
-  (* [*, upper] *)
-  | LA.RefinementType
-      (_, (_, id, LA.Int _),
-       LA.CompOp
-         (_, LA.Lte,
-          LA.Ident (_, id1),
-          upper))
-    when hstring_equal id id1 ->
-    begin
-      match int_of_ast_expr upper with
-      | Some upper -> Some (None, Some upper)
-      | None -> None
-    end
-  | _ -> None
-
-let source_inputs ast main_name =
-  List.find_map
-    (function
-      | LA.NodeDecl
-          (_, (node_id,
-               _is_imported,
-               _opacity,
-               _params,
-               inputs,
-               _outputs,
-               _locals,
-               _items,
-               _contract))
-        when
-          hstring_equal
-            (NodeId.get_user_name node_id)
-            main_name ->
-        Some inputs
-      | _ -> None)
-
-    ast
-
-let input_ranges input_sys trans_sys =
-  let ast =
-    InputSystem.lustre_source_ast input_sys
-  in
-  let aliases =
-    type_aliases ast
-  in
-  let main_name =
-    TransSys.scope_of_trans_sys trans_sys
-    |> InputSystem.get_node_id input_sys
-    |> NodeId.get_user_name
-  in
-  match source_inputs ast main_name with
-  | None -> HMap.empty
-  | Some inputs ->
+  match json with
+  | `Assoc fields ->
     List.fold_left
-      (fun ranges (_, name, ty, _, _) ->
-         match int_range_of_type aliases ty with
-         | Some range -> HMap.add name range ranges
-         | None -> ranges)
-      HMap.empty inputs
+      (fun env (name, json_entry) ->
+         if SMap.mem name env then
+           error file "input %S is specified more than once" name;
+
+         let spec = parse_spec file json_entry in
+         SMap.add name spec env)
+
+      SMap.empty
+      fields
+  | _ -> error file "top-level JSON value must be an object"
+
+
+let validate ~name ty spec =
+  match spec, Type.node_of_type ty with
+  | Fixed (`Bool _), Type.Bool -> ()
+  | Fixed (`String _), Type.Int
+  | Fixed (`String _), Type.IntRange _
+  | Fixed (`String _), Type.Enum _
+  | Fixed (`String _), Type.Real -> ()
+  | Fixed (`Int _), Type.Int
+  | Fixed (`Int _), Type.IntRange _
+  | Fixed (`Int _), Type.Enum _ -> ()
+  | Fixed (`Intlit _), Type.Int
+  | Fixed (`Intlit _), Type.IntRange _
+  | Fixed (`Intlit _), Type.Enum _ -> ()
+  | Fixed (`Float _), Type.Real -> ()
+  | Fixed _, _ ->
+    invalid_arg
+      (Format.asprintf
+         "SMC: fixed value for input %s is incompatible with type %a"
+         name
+         Type.pp_print_type
+         ty)
+  | Distribution Uniform, _ -> ()
+  | Distribution (Bernoulli p), Type.Bool ->
+    if p < 0.0 || p > 1.0 then
+      invalid_arg
+        (Format.asprintf
+           "SMC: invalid Bernoulli probability %g for input %s"
+           p name)
+  | Distribution (Bernoulli _), _ ->
+    invalid_arg
+      (Format.asprintf
+         "SMC: Bernoulli distribution requires Boolean input %s"
+         name)
+  | Distribution (UniformInt (lower, upper)), Type.Int
+  | Distribution (UniformInt (lower, upper)), Type.IntRange _
+  | Distribution (UniformInt (lower, upper)), Type.Enum _ ->
+    if lower > upper then
+      invalid_arg
+        (Format.asprintf
+           "SMC: invalid integer distribution [%d,%d] for input %s"
+           lower upper name)
+  | Distribution (UniformInt _), _ ->
+    invalid_arg
+      (Format.asprintf
+         "SMC: uniform_int requires integer input %s"
+         name)
+  | Distribution (UniformReal (lower, upper)), Type.Real ->
+    if lower > upper then
+      invalid_arg
+        (Format.asprintf
+           "SMC: invalid real distribution [%g,%g] for input %s"
+           lower upper name)
+  | Distribution (UniformReal _), _ ->
+    invalid_arg
+      (Format.asprintf
+         "SMC: uniform_real requires real input %s"
+         name)
+
+
+let pp fmt = function
+  | Fixed value ->
+    Format.fprintf fmt "fixed(%s)" (Yojson.Safe.to_string value)
+  | Distribution Uniform ->
+    Format.fprintf fmt "uniform"
+  | Distribution (Bernoulli p) ->
+    Format.fprintf fmt "bernoulli(%g)" p
+  | Distribution (UniformInt (lower, upper)) ->
+    Format.fprintf fmt "uniform_int(%d,%d)" lower upper
+  | Distribution (UniformReal (lower, upper)) ->
+    Format.fprintf fmt "uniform_real(%g,%g)" lower upper

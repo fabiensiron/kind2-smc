@@ -614,7 +614,7 @@ def test_fixed_estimator_vacuous_bound():
 
 def test_apmc_mode():
     output = run_smc(
-        "boolean.lus",
+       "boolean.lus",
         runs=1,# unused
         steps=1,
         params=["--smc_precision", str(0.05), "--smc_estimator", "apmc", "--smc_confidence", str(0.95)]
@@ -628,4 +628,99 @@ def test_apmc_mode():
         probability(output, "never_x"),
         expected=0.5,
         tolerance=0.02,
+    )
+
+# ---------------------------------------------------------------------------
+# Input distributions regression tests
+# ---------------------------------------------------------------------------
+
+def test_input_distributions(tmp_path):
+    input_file = tmp_path / "distributions.json"
+    input_file.write_text(
+        """
+{
+  "b": {
+    "distribution": "bernoulli",
+    "p": 0.2
+  },
+  "i": {
+    "distribution": "uniform_int",
+    "min": "0",
+    "max": "9"
+  },
+  "r": {
+    "distribution": "uniform_real",
+    "min": "-1.0",
+    "max": "1.0"
+  }
+}
+"""
+    )
+
+    output = run_smc(
+        "distributions.lus",
+        params=[
+            "--smc_input", str(input_file),
+            "--smc_seed", "42",
+        ],
+        runs=2000,
+        steps=1,
+    )
+
+    # b ~ Bernoulli(0.2)
+    # Property fails iff b = true.
+    assert_close(
+        probability(output, "bernoulli"),
+        expected=0.2,
+        tolerance=0.04,
+    )
+
+    # i ~ Uniform([0,9])
+    # Property fails iff i = 0.
+    assert_close(
+        probability(output, "uniform_int"),
+        expected=0.1,
+        tolerance=0.04,
+    )
+
+    # r ~ Uniform([-1,1])
+    # Property fails iff r < 0.
+    assert_close(
+        probability(output, "uniform_real"),
+        expected=0.5,
+        tolerance=0.05,
+    )
+
+
+def test_fixed_and_uniform_input(tmp_path):
+    input_file = tmp_path / "fixed_uniform.json"
+    input_file.write_text(
+        """
+{
+  "fixed": true,
+  "random": {
+    "distribution": "uniform"
+  }
+}
+"""
+    )
+
+    output = run_smc(
+        "fixed_uniform.lus",
+        params=[
+            "--smc_input", str(input_file),
+            "--smc_seed", "42",
+        ],
+        runs=2000,
+        steps=1,
+    )
+
+    # Fixed to true, so `not fixed` always fails.
+    assert probability(output, "fixed") == 1.0
+
+    # Uniform Boolean input.
+    assert_close(
+        probability(output, "uniform"),
+        expected=0.5,
+        tolerance=0.05,
     )

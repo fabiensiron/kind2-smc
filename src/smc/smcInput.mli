@@ -16,10 +16,30 @@
 
 *)
 
-module HMap = HString.HStringMap
+(* module SMap : Map.S with type key = string *)
 
+type distribution =
+  | Uniform
+  | Bernoulli of float
+  | UniformInt of int * int
+  | UniformReal of float * float
 
-val input_ranges :
-  'a InputSystem.t ->
-  TransSys.t ->
-  (int option * int option) HMap.t
+type t =
+  | Fixed of Yojson.Safe.t
+  | Distribution of distribution
+
+type env (* = t SMap.t *)
+
+val empty : env
+
+val find_opt : string -> env -> t option
+
+val iter : (string -> t -> unit) -> env -> unit
+
+val bindings : env -> (string * t) list
+
+val of_file : string -> env
+
+val validate : name:string -> Type.t -> t -> unit
+
+val pp : Format.formatter -> t -> unit

@@ -47,7 +47,6 @@ let init () =
       raise (Failure "main")
     end
 
-
 let random_real min max =
   if min > max then
     begin
@@ -73,7 +72,20 @@ let random_int min max =
 let random_bool () =
   Random.bool ()
 
-let random_value ~range ty =
+let decimal_of_string s =
+  let len = String.length s in
+  if len = 0 then
+    invalid_arg "SMC: empty real value"
+  else
+    match s.[0] with
+    | '-' ->
+      Decimal.of_string (String.sub s 1 (len - 1)) |> Decimal.neg
+    | '+' ->
+      Decimal.of_string (String.sub s 1 (len - 1))
+    | _ ->
+      Decimal.of_string s
+
+let random_uniform ~range ty =
   match Type.node_of_type ty with
   | Type.Bool -> random_bool () |> Term.mk_bool
   | Type.Int ->
@@ -98,9 +110,96 @@ let random_value ~range ty =
     random_int (Numeral.to_int lb) (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
   | Type.Real ->
     random_real !real_min !real_max
-    |> Printf.sprintf "%.17g" |> Decimal.of_string |> Term.mk_dec
+    |> Printf.sprintf "%.17g" |> decimal_of_string |> Term.mk_dec
   | _ ->
     KEvent.log L_error
       "SMC: unsupported input type %a" Type.pp_print_type ty;
     raise (Failure "main")
 
+let fixed_value ty value =
+  match Type.node_of_type ty, value with
+  | Type.Bool, `Bool value ->
+    Term.mk_bool value
+  | Type.Int, `Int value
+  | Type.IntRange _, `Int value
+  | Type.Enum _, `Int value ->
+    value
+    |> Numeral.of_int
+    |> Term.mk_num
+  | Type.Int, `Intlit value
+  | Type.IntRange _, `Intlit value
+  | Type.Enum _, `Intlit value
+  | Type.Int, `String value
+  | Type.IntRange _, `String value
+  | Type.Enum _, `String value ->
+    value
+    |> Numeral.of_string
+    |> Term.mk_num
+  | Type.Real, `Float value ->
+    value
+    |> Printf.sprintf "%.17g"
+    |> decimal_of_string
+    |> Term.mk_dec
+  | Type.Real, `Int value ->
+    value
+    |> string_of_int
+    |> Decimal.of_string
+    |> Term.mk_dec
+  | Type.Real, `Intlit value
+  | Type.Real, `String value ->
+    value
+    |> Decimal.of_string
+    |> Term.mk_dec
+  | _ ->
+    invalid_arg
+      (Format.asprintf
+         "SMC: fixed input value %s incompatible with type %a"
+         (Yojson.Safe.to_string value)
+         Type.pp_print_type
+         ty)
+
+let random_distribution ~range ty = function
+  | SmcInput.Uniform ->
+    random_uniform ~range ty
+  | SmcInput.Bernoulli p ->
+    begin
+      match Type.node_of_type ty with
+      | Type.Bool -> Term.mk_bool (Random.float 1.0 < p)
+      | _ ->
+        invalid_arg
+          "SMC: Bernoulli distribution on non-Boolean input"
+    end
+  | SmcInput.UniformInt (lower, upper) ->
+    begin
+      match Type.node_of_type ty with
+      | Type.Int
+      | Type.IntRange _
+      | Type.Enum _ ->
+        random_int lower upper
+        |> Numeral.of_int
+        |> Term.mk_num
+      | _ ->
+        invalid_arg
+          "SMC: uniform_int distribution on non-integer input"
+    end
+  | SmcInput.UniformReal (lower, upper) ->
+    begin
+      match Type.node_of_type ty with
+      | Type.Real ->
+        random_real lower upper
+        |> Printf.sprintf "%.17g"
+        |> decimal_of_string
+        |> Term.mk_dec
+      | _ ->
+        invalid_arg
+          "SMC: uniform_real distribution on non-real input"
+    end
+
+let random_value ~range ?spec ty =
+  match spec with
+  | None ->
+    random_uniform ~range ty
+  | Some (SmcInput.Fixed value) ->
+    fixed_value ty value
+  | Some (SmcInput.Distribution distribution) ->
+    random_distribution ~range ty distribution

@@ -1,0 +1,13 @@
+-- expected:
+-- P = 1 - (9/10)^K, with --smc_steps=K
+-- FAILED
+
+type Digit = subrange [0,9] of int;
+
+node main(x: Digit) returns (ok: bool);
+let
+  ok = x <> 0;
+
+  --%PROPERTY "nonzero" ok;
+  --%MAIN ;
+tel

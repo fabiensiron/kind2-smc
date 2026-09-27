@@ -1,0 +1,16 @@
+node main(
+  fixed : bool;
+  random : bool
+) returns ();
+
+let
+
+  check "fixed"
+    not fixed;
+
+  check "uniform"
+    not random;
+
+  --%MAIN;
+
+tel

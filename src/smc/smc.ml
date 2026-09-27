@@ -24,13 +24,13 @@ module Rand = SmcRand
 module Report = SmcReport
 module Estimator = SmcEstimator
 module Input = SmcInput
-module Hmap = SmcInput.HMap
+module Range = SmcRange
+module Hmap = SmcRange.HMap
 module Smap = Map.Make(String)
 module S = Set.Make(String)
 
 (* Solver instance if created *)
 let ref_solver = ref None
-
 
 (* Exit and terminate all processes here in case we are interrupted *)
 let on_exit _ = 
@@ -70,14 +70,18 @@ let build_input_equation state_var instant value =
 
   Term.mk_eq [var; value]
 
-let build_random_input_equations ranges inputs steps =
+let build_random_input_equations ranges input_distributions inputs steps =
   let equations = ref [] in
   List.iter
     (fun state_var ->
+       let state_var_name = StateVar.name_of_state_var state_var in
        let random_value () =
-         let name = HString.mk_hstring (StateVar.name_of_state_var state_var) in
+         let name = HString.mk_hstring state_var_name in
          let range = Hmap.find_opt name ranges in
-         state_var |> StateVar.type_of_state_var |> (Rand.random_value ~range)
+         let distribution = Input.find_opt state_var_name input_distributions in
+         state_var
+         |> StateVar.type_of_state_var
+         |> (Rand.random_value ~range ?spec:distribution)
        in
        if StateVar.is_const state_var then
          let value = random_value () in
@@ -92,6 +96,46 @@ let build_random_input_equations ranges inputs steps =
     ) inputs;
   !equations
 
+let validate_input_distributions inputs input_distributions =
+  let input_map =
+    List.fold_left
+      (fun map state_var ->
+         let name = StateVar.name_of_state_var state_var in
+
+         Smap.add name state_var map)
+
+      Smap.empty
+      inputs
+  in
+
+  Input.iter
+    (fun name distribution ->
+       match Smap.find_opt name input_map with
+       | None ->
+         KEvent.log
+           L_error
+           "SMC: input specification provided for unknown input %s"
+           name;
+         raise (Failure "main")
+       | Some state_var ->
+         begin
+           try
+             Input.validate ~name (StateVar.type_of_state_var state_var) distribution
+           with Invalid_argument message ->
+             KEvent.log
+               L_error
+               "%s"
+               message;
+             raise (Failure "main")
+         end)
+    input_distributions
+
+
+type property_query = {
+  name : string;
+  term : Term.t;
+}
+
 let invariant_properties trans_sys =
   TransSys.props_list_of_bound_no_skip
     trans_sys
@@ -104,18 +148,16 @@ let invariant_properties trans_sys =
 
 let build_property_terms trans_sys steps =
   invariant_properties trans_sys
-  |> List.fold_left
-    (fun acc (name, prop) ->
+  |> List.map
+    (fun (name, prop) ->
        let rec add_instant instant acc =
-         if instant >= steps then acc
+         if instant >= steps then List.rev acc
          else
            let term = Term.bump_state (Numeral.of_int instant) prop in
-           add_instant
-             (instant + 1)
-             ((name, instant, term) :: acc)
+           add_instant (instant + 1) (term :: acc)
        in
-       add_instant 0 acc)
-    []
+       let terms = add_instant 0 [] in
+       { name ; term = Term.mk_and terms })
 
 let estimator_config ~runs ~precision ~confidence =
   match Flags.SMC.estimator () with
@@ -124,7 +166,8 @@ let estimator_config ~runs ~precision ~confidence =
 
 let build_estimators properties =
   List.fold_left
-    (fun estimators (name, _, _) ->
+    (fun estimators property ->
+       let name = property.name in
        if Smap.mem name estimators then
          estimators
        else
@@ -136,7 +179,7 @@ let build_estimators properties =
 let estimators_update config estimators violations =
   let violated =
     List.fold_left
-      (fun names (name, _) -> S.add name names)
+      (fun names name -> S.add name names)
       S.empty violations in
 
   Smap.iter
@@ -172,31 +215,26 @@ let value_of_term values term =
 
 let violations_of_values props values =
   List.fold_left
-    (fun violations (name, instant, term) ->
-       let value = value_of_term values term in
+    (fun violations property ->
+       let value = value_of_term values property.term in
 
        if Term.equal value Term.t_false then
-         (* TODO: handle step violations *)
-         Smap.update
-           name
-           (function
-             | None -> Some instant
-             | Some previous -> Some (min previous instant))
-           violations
+         property.name :: violations
        else if Term.equal value Term.t_true then
          violations
        else
          begin
-           KEvent.log L_error "SMC: property %s did not evaluate to a Boolean" name;
+           KEvent.log L_error
+             "SMC: property %s did not evaluate to a Boolean"
+             property.name;
            raise (Failure "main")
          end
     )
-    Smap.empty
+    []
     props
-  |> Smap.to_list
 
 type run_result =
-  | Accepted of (string * int) list
+  | Accepted of string list
   | Rejected
 
 (*
@@ -207,9 +245,10 @@ type run_result =
  * Hence accepted traces are distributed according to the base
  * distribution conditioned on feasibility over the complete horizon.
  *)
-let run_one solver run ranges inputs steps properties =
+let run_one solver run ranges distributions inputs steps properties =
   (* Build random input equations *)
-  let input_equations = build_random_input_equations ranges inputs steps in
+  let input_equations =
+    build_random_input_equations ranges distributions inputs steps in
 
   SMTSolver.push solver;
   SMTSolver.assert_term solver @@ Term.mk_and input_equations;
@@ -236,14 +275,14 @@ let run_one solver run ranges inputs steps properties =
         solver
         if_sat
         if_unsat
-        (List.map (fun (_, _, term) -> term) properties) in
+        (List.map (fun property -> property.term) properties) in
   let _stop = Unix.gettimeofday () in
-
-  (*
+(*
   KEvent.log L_debug
     "SMC run %d: %.6fs"
     run
-    (stop -. start); *)
+    (_stop -. _start); *)
+  SMTSolver.pop solver;
   result
 
 
@@ -282,7 +321,31 @@ let main  (* input_file *) input_sys _ trans_sys =
   let estimator_config = estimator_config ~runs ~precision ~confidence in
 
   (* Build input ranges *)
-  let input_ranges = Input.input_ranges input_sys trans_sys in
+  let input_ranges = Range.input_ranges input_sys trans_sys in
+
+  (* Build input distributions *)
+  let input_distributions =
+    match Flags.SMC.input_file () with
+    | None -> Input.empty
+    | Some file ->
+      begin
+        try
+          Input.of_file file
+        with Invalid_argument message ->
+          KEvent.log
+            L_error
+            "%s"
+            message;
+          raise (Failure "main")
+      end
+  in
+  validate_input_distributions inputs input_distributions;
+
+  Input.iter
+    (fun name spec ->
+       KEvent.log
+         L_info "SMC input %s: %a" name Input.pp spec)
+    input_distributions;
 
   (* Build property terms *)
   let properties = build_property_terms trans_sys steps in
@@ -332,7 +395,9 @@ let main  (* input_file *) input_sys _ trans_sys =
     if !run mod 1000 = 0 then
       KEvent.progress @@ Report.accepted !statistics;
 
-    match run_one solver !run input_ranges inputs steps properties with
+    let run_status =
+      run_one solver !run input_ranges input_distributions inputs steps properties in
+    match run_status with
     | Rejected ->
       (* Trace is rejected because of transition system constraints. *)
       statistics := Report.inc_rejected !statistics

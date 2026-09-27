@@ -1,0 +1,20 @@
+node main(
+  b : bool;
+  i : int;
+  r : real
+) returns ();
+
+let
+
+  check "bernoulli"
+    not b;
+
+  check "uniform_int"
+    i <> 0;
+
+  check "uniform_real"
+    r >= 0.0;
+
+  --%MAIN;
+
+tel
