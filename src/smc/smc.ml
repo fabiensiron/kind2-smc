@@ -117,6 +117,11 @@ let build_property_terms trans_sys steps =
        add_instant 0 acc)
     []
 
+let estimator_config ~runs ~precision ~confidence =
+  match Flags.SMC.estimator () with
+  | `FIXED -> Estimator.make_fixed ~runs ~precision
+  | `APMC -> Estimator.make_apmc ~precision ~confidence
+
 let build_estimators properties =
   List.fold_left
     (fun estimators (name, _, _) ->
@@ -273,7 +278,8 @@ let main  (* input_file *) input_sys _ trans_sys =
 
   (* Build estimator config *)
   let precision = Flags.SMC.precision () in
-  let estimator_config = Estimator.make_fixed ~runs ~precision in
+  let confidence = Flags.SMC.confidence () in
+  let estimator_config = estimator_config ~runs ~precision ~confidence in
 
   (* Build input ranges *)
   let input_ranges = Input.input_ranges input_sys trans_sys in

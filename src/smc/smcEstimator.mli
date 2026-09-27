@@ -23,6 +23,11 @@ type config =
       runs : int ;
       precision : float ;
     }
+  | Apmc of {
+      runs : int ;
+      precision : float ;
+      confidence : float ;
+    }
 
 (* mutable state *)
 type t
@@ -33,8 +38,11 @@ type result = {
   probability : float ;
 }
 
-(** Build the estimator config *)
+(** Build the estimator for fixed runs *)
 val make_fixed : runs:int -> precision:float -> config
+
+(** Build the estimator for APMC *)
+val make_apmc : precision:float -> confidence:float -> config
 
 (** Build the estimator state (per property) *)
 val create : unit -> t
@@ -48,5 +56,14 @@ val finished : config -> t -> bool
 (** Return the final estimat. *)
 val result : t -> result
 
+(** Compute how many runs are necessary. *)
+val runs : config -> int
+
 (** Build the confidence using Chernoff-Hoeffding lower bound *)
 val confidence : config -> float
+
+(** Build the confidence using Chernoff-Hoeffding lower bound *)
+val precision : config -> float
+
+(** Compute runs for APMC *)
+val apmc_runs : precision:float -> confidence:float -> int

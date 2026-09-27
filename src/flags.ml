@@ -2690,6 +2690,27 @@ module SMC = struct
       )
   let seed () = !seed
 
+  type estimator_mode = [ `FIXED | `APMC ]
+  let estimator_of_string = function
+    | "apmc" -> `APMC
+    | "fixed" -> `FIXED
+    | unexpected -> Arg.Bad (
+        Format.sprintf "Unexpected value \"%s\" for flags --smc_estimator" unexpected
+      ) |> raise
+  let estimator_default = `FIXED
+  let estimator = ref estimator_default
+  let _ = add_spec
+    "--smc_estimator"
+    (Arg.String (fun str -> estimator := estimator_of_string str))
+    (fun fmt ->
+       Format.fprintf fmt
+         "@[<v>\
+          where <string> can be 'direct' or 'apmc'@ \
+          Define the estimator mode.@ \
+          Default: fixed@ \
+          @]"
+    )
+  let estimator () = !estimator
 
   let precision_default = 0.05
   let precision = ref precision_default
@@ -2705,6 +2726,21 @@ module SMC = struct
         precision_default
     )
   let precision () = !precision
+
+  let confidence_default = 0.95
+  let confidence = ref confidence_default
+  let _ = add_spec
+      "--smc_confidence"
+      (Arg.Set_float confidence)
+      (fun fmt ->
+         Format.fprintf fmt
+           "@[<v>\
+            Confidence of the estimation@ \
+            Default: %g@ \
+            @]"
+           confidence_default
+      )
+  let confidence () = !confidence
 
   let runs_default = 10
   let runs = ref runs_default

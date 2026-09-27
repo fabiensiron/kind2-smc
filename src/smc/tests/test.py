@@ -193,6 +193,14 @@ def hoeffding(runs, epsilon):
     delta = 2.0 * math.exp(-2.0 * runs * epsilon * epsilon)
     return max(0.0, min(1.0, 1.0 - delta))
 
+def apmc_runs(precision, confidence):
+    delta = 1.0 - confidence
+
+    return math.ceil(
+        math.log(2.0 / delta)
+        / (2.0 * precision * precision)
+    )
+
 # ---------------------------------------------------------------------------
 # Deterministic regression tests
 # ---------------------------------------------------------------------------
@@ -603,3 +611,21 @@ def test_fixed_estimator_vacuous_bound():
     )
 
     assert confidence(output) == 0.0
+
+def test_apmc_mode():
+    output = run_smc(
+        "boolean.lus",
+        runs=1,# unused
+        steps=1,
+        params=["--smc_precision", str(0.05), "--smc_estimator", "apmc", "--smc_confidence", str(0.95)]
+    )
+
+    generated, accepted, rejected = sample_counts(output)
+
+    assert accepted == 738
+
+    assert_close(
+        probability(output, "never_x"),
+        expected=0.5,
+        tolerance=0.02,
+    )

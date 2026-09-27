@@ -66,10 +66,11 @@ let pp_violations fmt n =
     Format.fprintf fmt "@{<red_b>%d@}" n
 
 let pp_estimator_pt fmt config =
+  let runs = SmcEstimator.runs config in
+  let precision = SmcEstimator.precision config in
+  let confidence = SmcEstimator.confidence config in
   match config with
-  | SmcEstimator.Fixed { runs ; precision } ->
-    let confidence = SmcEstimator.confidence config in
-
+  | SmcEstimator.Fixed _ ->
     Format.fprintf fmt
       "@[<v>\
        @{<b>Estimator@}@,\
@@ -79,23 +80,18 @@ let pp_estimator_pt fmt config =
        @[<h>  Confidence : @{<b>>= %.4f%%@}@]\
        @]@,"
       runs precision (100.0 *. confidence)
-
-(* let pp_property_pt accepted fmt p = *)
-(*   match probability accepted p.violations with *)
-(*   | None -> *)
-(*     Format.fprintf fmt *)
-(*       "@[<h>  Property @{<blue_b>%s@}: \ *)
-(*        violations = %d / 0, probability = @{<yellow_b>n/a@}@]" *)
-(*       p.name *)
-(*       p.violations *)
-(*   | Some probability -> *)
-(*     Format.fprintf fmt *)
-(*       "@[<h>  Property @{<blue_b>%s@}: \ *)
-(*        violations = %a / %d, probability = %a@]" *)
-(*       p.name *)
-(*       pp_violations p.violations *)
-(*       accepted *)
-(*       pp_probability probability *)
+  | SmcEstimator.Apmc _ ->
+    Format.fprintf fmt
+      "@[<v>\
+       @{<b>Estimator@}@,\
+       @[<h>  Method         : APMC@]@,\
+       @[<h>  Runs           : %d (computed)@]@,\
+       @[<h>  Precision      : ±%.6g@]@,\
+       @[<h>  Confidence     : @{<b>>= %.4f%%@}@]\
+       @]"
+      runs
+      precision
+      (100.0 *. confidence)
 
 let pp_property_pt precision fmt (name, estimate) =
   let lower = max 0.0 (estimate.SmcEstimator.probability -. precision) in
@@ -117,9 +113,7 @@ let pp_property_pt precision fmt (name, estimate) =
     upper
 
 let pp_pt fmt config estimates result =
-  let precision =
-    match config with
-    | SmcEstimator.Fixed { precision ; _ } -> precision in
+  let precision = SmcEstimator.precision config in
   Format.fprintf fmt
     "@[<v>\
     %a\

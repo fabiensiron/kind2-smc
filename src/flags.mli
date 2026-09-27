@@ -812,14 +812,22 @@ end
 (** {2 SMC flags} *)
 module SMC : sig
 
+  type estimator_mode = [ `FIXED | `APMC ]
+
   (** Run number of steps, override the number of steps given in the input file. *)
   val steps : unit -> int
 
   (** Seed to initialize the random engine. *)
   val seed : unit -> int option
 
+  (** Estimator mode. *)
+  val estimator : unit -> estimator_mode
+
   (** Precision for confidence estimation. *)
   val precision : unit -> float
+
+  (** Confidence of the estimation. *)
+  val confidence : unit -> float
 
   (** Number of independant random runs. *)
   val runs : unit -> int
