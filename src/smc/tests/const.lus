@@ -1,0 +1,13 @@
+-- expected:
+-- ./bin/kind2 --enable SMC --smc_steps 1 --smc_runs 1000 src/smc/tests/const.lus
+-- P ~= 0.5
+-- ./bin/kind2 --enable SMC --smc_steps 5 --smc_runs 1000 src/smc/tests/const.lus
+-- P ~= 0.5
+
+node main(const x: bool) returns (ok: bool);
+let
+  ok = not x;
+
+  --%PROPERTY "never_x" ok;
+  --%MAIN ;
+tel

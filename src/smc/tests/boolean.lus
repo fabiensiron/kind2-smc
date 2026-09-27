@@ -1,0 +1,18 @@
+-- expected:
+-- P ~= 1 - 0.5^K, with --smc_steps K
+-- ./bin/kind2 --enable SMC --smc_steps 1 --smc_runs 1000 src/smc/tests/boolean.lus
+-- P ~= 0.5
+-- ./bin/kind2 --enable SMC --smc_steps 2 --smc_runs 1000 src/smc/tests/boolean.lus
+-- P ~= 0.75
+-- ./bin/kind2 --enable SMC --smc_steps 3 --smc_runs 1000 src/smc/tests/boolean.lus
+-- P ~= 0.875
+-- ./bin/kind2 --enable SMC --smc_steps 5 --smc_runs 1000 src/smc/tests/boolean.lus
+-- P ~= 0.96875
+
+node main(x: bool) returns (ok: bool);
+let
+  ok = not x;
+
+  --%PROPERTY "never_x" ok;
+  --%MAIN ;
+tel

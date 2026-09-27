@@ -1,0 +1,10 @@
+type Digit = subrange [0,9] of int;
+
+node main(x: Digit; y: Digit) returns (ok: bool);
+let
+  assert x < y;
+  ok = x <> 0;
+
+  --%PROPERTY "nonzero_x" ok;
+  --%MAIN ;
+tel

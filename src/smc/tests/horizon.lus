@@ -1,0 +1,13 @@
+-- expected
+-- ./bin/kind2 --enable SMC --smc_steps 2 --smc_runs 1000 src/smc/tests/horizon.lus
+-- P = 0
+-- ./bin/kind2 --enable SMC --smc_steps 3 --smc_runs 1000 src/smc/tests/horizon.lus
+-- P = 1
+
+node main(dummy: bool) returns (count: int);
+let
+  count = 0 -> pre(count) + 1;
+
+  --%PROPERTY "count_lt_2" count < 2;
+  --%MAIN ;
+tel

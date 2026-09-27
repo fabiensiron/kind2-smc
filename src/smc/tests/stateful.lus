@@ -1,0 +1,24 @@
+-- expected:
+-- P = 1 - F(K + 1) / 2^K, with --smc_steps=K and F(n) is fibonnaci
+-- ./bin/kind2 --enable SMC --smc_steps 1 --smc_runs 1000 src/smc/tests/stateful.lus
+-- P = 0
+-- ./bin/kind2 --enable SMC --smc_steps 2 --smc_runs 1000 src/smc/tests/stateful.lus
+-- P ~= 0.25
+-- ./bin/kind2 --enable SMC --smc_steps 3 --smc_runs 1000 src/smc/tests/stateful.lus
+-- P ~= 0.375
+-- ./bin/kind2 --enable SMC --smc_steps 4 --smc_runs 1000 src/smc/tests/stateful.lus
+-- P ~= 0.5
+-- ./bin/kind2 --enable SMC --smc_steps 5 --smc_runs 1000 src/smc/tests/stateful.lus
+-- P ~= 0.59375
+-- ./bin/kind2 --enable SMC --smc_steps 10 --smc_runs 1000 src/smc/tests/stateful.lus
+-- P ~= 0.859375
+
+node main(x: bool) returns (bad: bool);
+let
+  bad =
+    false ->
+    (x and pre(x));
+
+  --%PROPERTY "no_consecutive_true" not bad;
+  --%MAIN ;
+tel

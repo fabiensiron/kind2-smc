@@ -1,0 +1,12 @@
+-- expected:
+-- ./bin/kind2 --enable SMC --smc_steps K --smc_runs 1000 src/smc/tests/any_deterministic.lus
+-- P = 0 (for any K)
+
+node main(x: int) returns (a: int; ok: bool);
+let
+  a = any { y: int | y >= x and y <= x + 10 };
+  ok = a >= x and a <= x + 10;
+
+  --%PROPERTY "any_constraint" ok;
+  --%MAIN ;
+tel
