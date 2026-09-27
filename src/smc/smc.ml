@@ -233,9 +233,40 @@ let violations_of_values props values =
     []
     props
 
+type solver_mode = [ `INCREMENTAL | `ONESHOT ]
+
+let run_one_solver_setup solver trans_sys last_instant =
+  let solver_setup_incremental solver = SMTSolver.push_solver; solver in
+  let solver_setup_oneshot solver =
+    let logic = TransSys.get_logic trans_sys in
+    let solver = Flags.Smt.solver ()
+      |> SMTSolver.create_instance ~produce_models:false logic in
+    TransSys.define_and_declare_of_bounds
+      trans_sys
+      (SMTSolver.define_fun solver)
+      (SMTSolver.declare_fun solver)
+      (SMTSolver.declare_sort solver)
+      Numeral.(~- one) Numeral.(of_int last_instant) ;
+    TransSys.assert_global_constraints trans_sys (SMTSolver.assert_term solver) ;
+    SMTSolver.assert_term solver
+      (TransSys.init_of_bound (Some (SMTSolver.declare_fun solver))
+         trans_sys Numeral.zero);
+    assert_trans solver trans_sys (Numeral.of_int last_instant);
+    solver
+
+  if Flags.SMC.solver_mode () = `INCREMENTAL then solver_setup_incremental solver
+  else solver_setup_oneshot solver
+
+
+let run_one_solver_cleanup solver =
+  if Flags.SMC.solver_mode () = `INCREMENTAL then SMTSolver.pop solver
+  else SMTSolver.delete_instance solver
+
+
 type run_result =
   | Accepted of string list
   | Rejected
+
 
 (*
  * Random traces are sampled from the base input distribution and
@@ -245,12 +276,13 @@ type run_result =
  * Hence accepted traces are distributed according to the base
  * distribution conditioned on feasibility over the complete horizon.
  *)
-let run_one solver run ranges distributions inputs steps properties =
+let run_one solver run trans_sys last_instant ranges distributions inputs steps properties =
   (* Build random input equations *)
   let input_equations =
     build_random_input_equations ranges distributions inputs steps in
 
-  SMTSolver.push solver;
+  let solver = run_one_solver_setup solver trans_sys last_instant in
+
   SMTSolver.assert_term solver @@ Term.mk_and input_equations;
 
   (* Solver continuations *)
@@ -282,7 +314,7 @@ let run_one solver run ranges distributions inputs steps properties =
     "SMC run %d: %.6fs"
     run
     (_stop -. _start); *)
-  SMTSolver.pop solver;
+  run_one_solver_cleanup solver;
   result
 
 
@@ -359,7 +391,7 @@ let main  (* input_file *) input_sys _ trans_sys =
   (* Create solver instance *)
   let solver =
     Flags.Smt.solver ()
-    |> SMTSolver.create_instance ~produce_models:true logic
+    |> SMTSolver.create_instance ~produce_models:false logic
   in
 
   (* Create a reference for the solver. Only used in on_exit. *)
@@ -373,12 +405,12 @@ let main  (* input_file *) input_sys _ trans_sys =
     (SMTSolver.define_fun solver)
     (SMTSolver.declare_fun solver)
     (SMTSolver.declare_sort solver)
-    Numeral.(~- one) Numeral.(of_int last_instant) ;
+     Numeral.(~- one) Numeral.(of_int last_instant) ;
 
   TransSys.assert_global_constraints trans_sys (SMTSolver.assert_term solver) ;
 
   (* Assert initial state constraint *)
-    SMTSolver.assert_term solver
+  SMTSolver.assert_term solver
       (TransSys.init_of_bound (Some (SMTSolver.declare_fun solver))
          trans_sys Numeral.zero);
 
@@ -396,7 +428,7 @@ let main  (* input_file *) input_sys _ trans_sys =
       KEvent.progress @@ Report.accepted !statistics;
 
     let run_status =
-      run_one solver !run input_ranges input_distributions inputs steps properties in
+      run_one solver !run trans_sys last_instant input_ranges input_distributions inputs steps properties in
     match run_status with
     | Rejected ->
       (* Trace is rejected because of transition system constraints. *)

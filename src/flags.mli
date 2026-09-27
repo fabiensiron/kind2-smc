@@ -813,6 +813,10 @@ end
 module SMC : sig
 
   type estimator_mode = [ `FIXED | `APMC ]
+  type solver_mode = [ `INCREMENTAL | `ONESHOT ]
+
+  (** Input file containing distributions *)
+  val input_file : unit -> string option
 
   (** Run number of steps, override the number of steps given in the input file. *)
   val steps : unit -> int
@@ -822,6 +826,9 @@ module SMC : sig
 
   (** Estimator mode. *)
   val estimator : unit -> estimator_mode
+
+  (** Solver mode. *)
+  val solver_mode : unit -> solver_mode
 
   (** Precision for confidence estimation. *)
   val precision : unit -> float

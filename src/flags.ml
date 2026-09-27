@@ -2712,6 +2712,29 @@ module SMC = struct
     )
   let estimator () = !estimator
 
+  type solver_mode = [ `INCREMENTAL | `ONESHOT ]
+  let solver_mode_of_string = function
+    | "incremental" -> `INCREMENTAL
+    | "oneshot" -> `ONESHOT
+    | unexpected -> Arg.Bad (
+        Format.sprintf "Unexpected value \"%s\" for flags --smc_solver_mode" unexpected
+      ) |> raise
+  let solver_mode_default = `INCREMENTAL
+  let solver_mode = ref solver_mode_default
+  let _ = add_spec
+      "--smc_solver_mode"
+      (Arg.String (fun str -> solver_mode := solver_mode_of_string str))
+      (fun fmt ->
+         Format.fprintf fmt
+           "@[<v>\
+            where <string> can be 'incremental' or 'oneshot'@ \
+            Define the solver mode.@ \
+            Default: incremental@ \
+            @]"
+      )
+  let solver_mode () = !solver_mode
+
+
   let precision_default = 0.05
   let precision = ref precision_default
   let _ = add_spec
@@ -2806,6 +2829,16 @@ module SMC = struct
             @]"
       )
   let real_max () = !real_max
+
+  let input_file_default = None
+  let input_file = ref input_file_default
+  let _ = add_spec
+      "--smc_input"
+      (Arg.String (fun s -> input_file := Some s))
+      (fun fmt ->
+         Format.fprintf fmt "@[<v>Read input from file@]"
+      )
+  let input_file () = !input_file
 
 end
 
