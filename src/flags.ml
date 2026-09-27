@@ -2672,6 +2672,20 @@ module Interpreter = struct
     )
   let input_file () = !input_file
 
+  let check_props_default = false
+  let check_props = ref check_props_default
+  let _ = add_spec
+    "--interpreter_check_properties"
+    (bool_arg check_props)
+    (fun fmt ->
+       Format.fprintf fmt "@[<v>\
+                           Check that the properties are satisfiable@ \
+                           Default: %a\
+                           @]"
+         fmt_bool check_props_default
+    )
+  let check_props () = !check_props
+
   let steps_default = 0
   let steps = ref steps_default
   let _ = add_spec
