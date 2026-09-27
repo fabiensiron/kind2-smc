@@ -23,16 +23,48 @@ let real_max = ref 1000.0
 
 let init () =
   Random.self_init () (* TODO: add a --smc_seed option *);
+
   int_min := Flags.SMC.int_min ();
   int_max := Flags.SMC.int_max ();
   real_min := Flags.SMC.real_min ();
-  real_max := Flags.SMC.real_max ()
+  real_max := Flags.SMC.real_max ();
+
+  if !int_min > !int_max then
+    begin
+      KEvent.log L_error
+        "SMC: --smc-int-min must be smaller than --smc-int-max";
+      raise (Failure "main")
+    end;
+
+  if !real_min > !real_max then
+    begin
+      KEvent.log L_error
+        "SMC: --smc-real-min must be smaller than --smc-real-max";
+      raise (Failure "main")
+    end
+
 
 let random_real min max =
-  min +. Random.float (max -. min)
+  if min > max then
+    begin
+      KEvent.log L_error
+        "SMC: empty real sampling interval [%g, %g]" min max;
+      raise (Failure "main")
+    end
+  else if min = max then min
+  else
+    min +. Random.float (max -. min)
 
 let random_int min max =
-  Random.int_in_range ~min ~max
+  if min > max then
+    begin
+      KEvent.log L_error
+        "SMC: empty integer sampling interval [%d, %d]" min max;
+      raise (Failure "main")
+    end
+  else if min = max then min
+  else
+    Random.int_in_range ~min ~max
 
 let random_bool () =
   Random.bool ()
@@ -48,13 +80,15 @@ let random_value ty =
     random_int !int_min (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
   | Type.IntRange (Some lb, None) ->
     random_int (Numeral.to_int lb) !int_max |> Numeral.of_int |> Term.mk_num
+  | Type.IntRange (None, None) ->
+    random_int !int_min !int_max |> Numeral.of_int |> Term.mk_num
   | Type.Enum (lb, ub) ->
     random_int (Numeral.to_int lb) (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
   | Type.Real ->
     random_real !real_min !real_max
     |> Printf.sprintf "%.17g" |> Decimal.of_string |> Term.mk_dec
   | _ ->
-    failwith
-      (Format.asprintf
-         "SMC: unsupported input type %a" Type.pp_print_type ty)
+    KEvent.log L_error
+      "SMC: unsupported input type %a" Type.pp_print_type ty;
+    raise (Failure "main")
 

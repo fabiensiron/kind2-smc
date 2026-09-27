@@ -43,7 +43,7 @@ let on_exit _ =
          "Error deleting solver_init: %s" 
          (Printexc.to_string e))
 
-(* Assert transition relation for all steps below [i] *)
+(* Assert transition relations from [1] to [i] *)
 let rec assert_trans solver t i =
   (* Instant zero is base instant *)
   if Numeral.(i < one) then () else 
@@ -107,41 +107,59 @@ let build_property_terms trans_sys steps =
        add_instant 0 acc)
     []
 
-module S = Set.Make(String)
+module Smap = Map.Make(String)
+
+let value_of_term values term =
+  match
+    List.find_opt
+      (fun (queried_term, _) ->
+        Term.equal queried_term term)
+      values
+  with
+  | Some (_, value) -> value
+  | None ->
+    KEvent.log L_error "SMC: solver did not return a value for property term %a"
+      Term.pp_print_term
+      term;
+    raise (Failure "main")
 
 let violations_of_values props values =
-  let pset = ref S.empty in
   List.fold_left
-    (fun acc (name, instant, term) ->
-       let value_opt =
-         List.find_opt
-           (fun (queried_term, _) ->
-              Term.equal queried_term term)
-           values in
-       let (_, value) =
-         try Option.get value_opt
-         with _ ->
-           failwith (Format.asprintf "SMC: solver did not return a value for property term %a"
-                       Term.pp_print_term term) in
+    (fun violations (name, instant, term) ->
+       let value = value_of_term values term in
+
        if Term.equal value Term.t_false then
          (* TODO: handle step violations *)
-         if not @@ S.mem name !pset then
-           (pset := S.add name !pset; (name, instant) :: acc)
-         else acc
+         Smap.update
+           name
+           (function
+             | None -> Some instant
+             | Some previous -> Some (min previous instant))
+           violations
        else if Term.equal value Term.t_true then
-         acc
+         violations
        else
-         failwith
-           (Format.asprintf
-              "SMC: property %s did not evaluate to a Boolean" name)
+         begin
+           KEvent.log L_error "SMC: property %s did not evaluate to a Boolean" name;
+           raise (Failure "main")
+         end
     )
-    []
+    Smap.empty
     props
+  |> Smap.to_list
 
 type run_result =
   | Accepted of (string * int) list
   | Rejected
 
+(*
+ * Random traces are sampled from the base input distribution and
+ * rejected if they are incompatible with the transition-system
+ * constraints.
+ *
+ * Hence accepted traces are distributed according to the base
+ * distribution conditioned on feasibility over the complete horizon.
+ *)
 let run_one solver inputs steps properties =
   (* Build random input equations *)
   let input_equations = build_random_input_equations inputs steps in
@@ -196,12 +214,18 @@ let main  (* input_file *) input_sys _ trans_sys =
   let steps = Flags.SMC.steps () in
 
   if steps <= 0 then
-    invalid_arg "SMC: number of steps must be strictly positive";
+    begin
+      KEvent.log L_error "SMC: number of steps must be strictly positive";
+      raise (Failure "main")
+    end;
 
   let runs = Flags.SMC.runs () in
 
   if runs <= 0 then
-    invalid_arg "SMC: number of runs must be strictly positive";
+    begin
+      KEvent.log L_error "SMC: number of runs must be strictly positive";
+      raise (Failure "main")
+    end;
 
   KEvent.log L_info "SMC: %d runs of %d steps" runs steps;
 
@@ -211,7 +235,7 @@ let main  (* input_file *) input_sys _ trans_sys =
   let logic = TransSys.get_logic trans_sys in
 
   (* Create solver instance *)
-  let solver = 
+  let solver =
     Flags.Smt.solver ()
     |> SMTSolver.create_instance ~produce_models:true logic
   in
@@ -219,13 +243,15 @@ let main  (* input_file *) input_sys _ trans_sys =
   (* Create a reference for the solver. Only used in on_exit. *)
   ref_solver := Some solver;
 
+  let last_instant = steps - 1 in
+
   (* Defining uf's and declaring variables. *)
   TransSys.define_and_declare_of_bounds
     trans_sys
     (SMTSolver.define_fun solver)
     (SMTSolver.declare_fun solver)
     (SMTSolver.declare_sort solver)
-    Numeral.(~- one) Numeral.(of_int steps) ;
+    Numeral.(~- one) Numeral.(of_int last_instant) ;
 
   TransSys.assert_global_constraints trans_sys (SMTSolver.assert_term solver) ;
 
@@ -235,10 +261,11 @@ let main  (* input_file *) input_sys _ trans_sys =
          trans_sys Numeral.zero);
 
   (* Assert transition relation up to number of steps *)
-  assert_trans solver trans_sys (Numeral.of_int steps);
+  assert_trans solver trans_sys (Numeral.of_int last_instant);
 
   let statistics = ref (Report.make ~generated:0 ~accepted:0 ~rejected:0 properties) in
   let run = ref 0 in
+  (* TODO: add maximum iteration credit *)
   while Report.accepted !statistics < runs do
     run := !run + 1;
     statistics := Report.inc_generated !statistics;

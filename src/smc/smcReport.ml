@@ -51,9 +51,14 @@ let add_violations stats violations =
   {
     stats with
     properties =
-      List.fold_left (fun vs (name, _) ->
-          let update v = Some (succ @@ try Option.get v with _ -> 0) in
-          Smap.update name update vs
+      List.fold_left
+        (fun properties (name, _) ->
+           match Smap.find_opt name properties with
+           | Some count ->
+             Smap.add name (count + 1) properties
+           | None ->
+             KEvent.log L_error "SMC report: unknown property %s" name;
+             raise (Failure "main")
         ) stats.properties violations
   }
 
@@ -97,7 +102,7 @@ let pp_property_pt accepted fmt p =
   | None ->
     Format.fprintf fmt
       "@[<h>  Property @{<blue_b>%s@}: \
-       violations = %d / 0, probability = @{<yellow_h>n/a@}@]"
+       violations = %d / 0, probability = @{<yellow_b>n/a@}@]"
       p.name
       p.violations
   | Some probability ->
@@ -145,3 +150,4 @@ let render result : KEvent.rendered_result =
     xml = (fun fmt -> pp_xml fmt result) ;
     json = (fun fmt -> pp_json fmt result) ;
   }
+  
