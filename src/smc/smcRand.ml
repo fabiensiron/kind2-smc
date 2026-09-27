@@ -16,12 +16,17 @@
 
 *)
 
-let default_int_min = -1000
-let default_int_max = 1000
-let default_real_min = -1000.0
-let default_real_max = 1000.0
+let int_min = ref (-1000)
+let int_max = ref 1000
+let real_min = ref (-1000.0)
+let real_max = ref 1000.0
 
-let init () = Random.self_init () (* TODO: add a --smc_seed option *)
+let init () =
+  Random.self_init () (* TODO: add a --smc_seed option *);
+  int_min := Flags.SMC.int_min ();
+  int_max := Flags.SMC.int_max ();
+  real_min := Flags.SMC.real_min ();
+  real_max := Flags.SMC.real_max ()
 
 let random_real min max =
   min +. Random.float (max -. min)
@@ -36,17 +41,17 @@ let random_value ty =
   match Type.node_of_type ty with
   | Type.Bool -> random_bool () |> Term.mk_bool
   | Type.Int ->
-    random_int default_int_min default_int_max |> Numeral.of_int |> Term.mk_num
+    random_int !int_min !int_max |> Numeral.of_int |> Term.mk_num
   | Type.IntRange (Some lb, Some ub) ->
     random_int (Numeral.to_int lb) (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
   | Type.IntRange (None, Some ub) ->
-    random_int default_int_min (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
+    random_int !int_min (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
   | Type.IntRange (Some lb, None) ->
-    random_int (Numeral.to_int lb) default_int_max |> Numeral.of_int |> Term.mk_num
+    random_int (Numeral.to_int lb) !int_max |> Numeral.of_int |> Term.mk_num
   | Type.Enum (lb, ub) ->
     random_int (Numeral.to_int lb) (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
   | Type.Real ->
-    random_real default_real_min default_real_max
+    random_real !real_min !real_max
     |> Printf.sprintf "%.17g" |> Decimal.of_string |> Term.mk_dec
   | _ ->
     failwith

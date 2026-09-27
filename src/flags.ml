@@ -2688,6 +2688,59 @@ module SMC = struct
         @]"
     )
   let runs () = !runs
+
+  let int_min_default = -1000
+  let int_min = ref int_min_default
+  let _ = add_spec
+      "--smc_int_min"
+      (Arg.Set_int int_min)
+      (fun fmt ->
+         Format.fprintf fmt
+           "@[<v>\
+            Minimal value of sampled integers
+            @]"
+      )
+  let int_min () = !int_min
+
+  let int_max_default = 1000
+  let int_max = ref int_max_default
+  let _ = add_spec
+      "--smc_int_max"
+      (Arg.Set_int int_max)
+      (fun fmt ->
+         Format.fprintf fmt
+           "@[<v>\
+            Maximal value of sampled integers
+            @]"
+      )
+  let int_max () = !int_max
+
+  let real_min_default = -1000.0
+  let real_min = ref real_min_default
+  let _ = add_spec
+      "--smc_real_min"
+      (Arg.Set_float real_min)
+      (fun fmt ->
+         Format.fprintf fmt
+           "@[<v>\
+            Minimal value of sampled reals
+            @]"
+      )
+  let real_min () = !real_min
+
+  let real_max_default = 1000.0
+  let real_max = ref real_max_default
+  let _ = add_spec
+      "--smc_real_max"
+      (Arg.Set_float real_max)
+      (fun fmt ->
+         Format.fprintf fmt
+           "@[<v>\
+            Maximal value of sampled reals
+            @]"
+      )
+  let real_max () = !real_max
+
 end
 
 (* Interpreter flags. *)

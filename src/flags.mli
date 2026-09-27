@@ -818,6 +818,18 @@ module SMC : sig
 
   (** Number of independant random runs. *)
   val runs : unit -> int
+
+  (** Minimal value of sampled integers. *)
+  val int_min : unit -> int
+
+  (** Maximal value of sampled integers. *)
+  val int_max : unit -> int
+
+  (** Minimal value of sampled reals. *)
+  val real_min : unit -> float
+
+  (** Maximal value of sampled reals. *)
+  val real_max : unit -> float
 end
 
 (** {2 LSP flags} *)
