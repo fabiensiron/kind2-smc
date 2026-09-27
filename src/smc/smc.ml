@@ -75,6 +75,7 @@ let initialize_solver solver trans_sys last_instant =
   TransSys.define_and_declare_of_bounds
     trans_sys
     (SMTSolver.define_fun solver)
+    ~define_rec:(SMTSolver.define_funs_rec solver)
     (SMTSolver.declare_fun solver)
     (SMTSolver.declare_sort solver)
     Numeral.(~- one)
