@@ -16,49 +16,120 @@
 
 *)
 
-(*./kind2 --enable interpreter --debug smt --debug parse microwave.lus*)
 open Lib
-open Actlit
 
 module Rand = SmcRand
 module Report = SmcReport
 module Estimator = SmcEstimator
 module Input = SmcInput
 module Range = SmcRange
+
 module Hmap = SmcRange.HMap
 module Smap = Map.Make(String)
 module S = Set.Make(String)
 
-(* Solver instance if created *)
-let ref_solver = ref None
+(* -------------------------------------------------------------------------- *)
+(* Solver lifecycle                                                           *)
+(* -------------------------------------------------------------------------- *)
 
-(* Exit and terminate all processes here in case we are interrupted *)
-let on_exit _ = 
+let active_solver = ref None
 
-  (* Delete solver instance if created *)
-  (try 
-     match !ref_solver with 
-       | Some solver -> 
-         SMTSolver.delete_instance solver;  
-         ref_solver := None
+let on_exit _ =
+  (try
+     match !active_solver with
+       | Some solver ->
+         SMTSolver.delete_instance solver;
+         active_solver := None
        | None -> ()
-   with 
-     | e -> 
+   with
+     | e ->
        KEvent.log L_error
-         "Error deleting solver_init: %s" 
+         "SMC: error deleting solver: %s"
          (Printexc.to_string e))
 
-(* Assert transition relations from [1] to [i] *)
-let rec assert_trans solver t i =
+
+let create_solver trans_sys =
+  let logic = TransSys.get_logic trans_sys in
+  Flags.Smt.solver ()
+  |> SMTSolver.create_instance ~produce_models:false logic
+
+
+(* Assert transition relations from instant [1] through [last_instant] *)
+let rec assert_trans solver trans_sys last_instant =
   (* Instant zero is base instant *)
-  if Numeral.(i < one) then () else 
+  if Numeral.(last_instant < one) then () else
     begin
-      (* Assert transition relation from [i-1] to [i] *)
-      SMTSolver.assert_term solver
-        (TransSys.trans_of_bound (Some (SMTSolver.declare_fun solver)) t i);
-      (* Continue with for [i-2] and [i-1] *)
-      assert_trans solver t Numeral.(i - one)
+      (* Assert transition relation from [last_instant-1] to [last_instant] *)
+      SMTSolver.assert_term
+        solver
+        (TransSys.trans_of_bound
+           (Some (SMTSolver.declare_fun solver))
+           trans_sys last_instant);
+      (* Continue with [last_instant-1] *)
+      assert_trans solver trans_sys Numeral.(last_instant - one)
     end
+
+
+let initialize_solver solver trans_sys last_instant =
+  (* Defining uf's and declaring variables. *)
+  TransSys.define_and_declare_of_bounds
+    trans_sys
+    (SMTSolver.define_fun solver)
+    (SMTSolver.declare_fun solver)
+    (SMTSolver.declare_sort solver)
+    Numeral.(~- one)
+    Numeral.(of_int last_instant);
+
+  (* Global constraints. *)
+  TransSys.assert_global_constraints
+    trans_sys
+    (SMTSolver.assert_term solver);
+
+  (* Initial-state constraint *)
+  SMTSolver.assert_term
+    solver
+    (TransSys.init_of_bound
+       (Some (SMTSolver.declare_fun solver))
+       trans_sys
+       Numeral.zero);
+
+  (* Transition relation up to the requested horizon *)
+  assert_trans solver trans_sys (Numeral.of_int last_instant)
+
+
+let with_solver trans_sys last_instant f =
+  let solver = create_solver trans_sys in
+
+  active_solver := Some solver;
+
+  Fun.protect
+    ~finally:(fun () ->
+        active_solver := None;
+        try
+          SMTSolver.delete_instance solver;
+        with
+        | e ->
+          KEvent.log L_error
+            "SMC: error deleting solver: %s"
+            (Printexc.to_string e))
+    (fun () ->
+       initialize_solver solver trans_sys last_instant;
+       f solver)
+
+
+let with_incremental_frame solver f =
+  SMTSolver.push solver;
+
+  Fun.protect
+    ~finally:
+      (fun () -> SMTSolver.pop solver)
+    (fun () -> f solver)
+
+
+(* -------------------------------------------------------------------------- *)
+(* Input Sampling                                                             *)
+(* -------------------------------------------------------------------------- *)
+
 
 let build_input_equation state_var instant value =
   let var =
@@ -70,19 +141,28 @@ let build_input_equation state_var instant value =
 
   Term.mk_eq [var; value]
 
+
+let random_input_value ranges input_distributions state_var =
+  let name = StateVar.name_of_state_var state_var in
+  let range =
+    name
+    |> HString.mk_hstring
+    |> (fun name -> Hmap.find_opt name ranges) in
+
+  let distribution = Input.find_opt name input_distributions in
+
+  Rand.random_value
+    ~range
+    ?spec:distribution
+    @@ StateVar.type_of_state_var state_var
+
+
 let build_random_input_equations ranges input_distributions inputs steps =
   let equations = ref [] in
   List.iter
     (fun state_var ->
-       let state_var_name = StateVar.name_of_state_var state_var in
        let random_value () =
-         let name = HString.mk_hstring state_var_name in
-         let range = Hmap.find_opt name ranges in
-         let distribution = Input.find_opt state_var_name input_distributions in
-         state_var
-         |> StateVar.type_of_state_var
-         |> (Rand.random_value ~range ?spec:distribution)
-       in
+         random_input_value ranges input_distributions state_var in
        if StateVar.is_const state_var then
          let value = random_value () in
          for instant = 0 to steps - 1 do
@@ -95,6 +175,12 @@ let build_random_input_equations ranges input_distributions inputs steps =
          done
     ) inputs;
   !equations
+
+
+(* -------------------------------------------------------------------------- *)
+(* Input Distributions                                                        *)
+(* -------------------------------------------------------------------------- *)
+
 
 let validate_input_distributions inputs input_distributions =
   let input_map =
@@ -120,7 +206,11 @@ let validate_input_distributions inputs input_distributions =
        | Some state_var ->
          begin
            try
-             Input.validate ~name (StateVar.type_of_state_var state_var) distribution
+             Input.validate
+               ~name
+               (StateVar.type_of_state_var state_var)
+               distribution
+
            with Invalid_argument message ->
              KEvent.log
                L_error
@@ -131,10 +221,39 @@ let validate_input_distributions inputs input_distributions =
     input_distributions
 
 
+let load_input_distributions () =
+  match Flags.SMC.input_file () with
+  | None -> Input.empty
+  | Some file ->
+    try
+      Input.of_file file
+
+    with Invalid_argument message ->
+      KEvent.log
+        L_error
+        "%s"
+        message;
+      raise (Failure "main")
+
+
+let log_input_distributions input_distributions =
+  Input.iter
+    (fun name spec ->
+       KEvent.log
+         L_info "SMC input %s: %a" name Input.pp spec)
+    input_distributions
+
+
+(* -------------------------------------------------------------------------- *)
+(* Property handling                                                          *)
+(* -------------------------------------------------------------------------- *)
+
+
 type property_query = {
   name : string;
   term : Term.t;
 }
+
 
 let invariant_properties trans_sys =
   TransSys.props_list_of_bound_no_skip
@@ -146,64 +265,31 @@ let invariant_properties trans_sys =
        | Property.Invariant -> true
        | _ -> false)
 
+
 let build_property_terms trans_sys steps =
   invariant_properties trans_sys
   |> List.map
     (fun (name, prop) ->
+
        let rec add_instant instant acc =
-         if instant >= steps then List.rev acc
+         if instant >= steps then
+           List.rev acc
          else
            let term = Term.bump_state (Numeral.of_int instant) prop in
            add_instant (instant + 1) (term :: acc)
        in
        let terms = add_instant 0 [] in
-       { name ; term = Term.mk_and terms })
+       {
+         name = name ;
+         term = Term.mk_and terms
+       })
 
-let estimator_config ~runs ~precision ~confidence =
-  match Flags.SMC.estimator () with
-  | `FIXED -> Estimator.make_fixed ~runs ~precision
-  | `APMC -> Estimator.make_apmc ~precision ~confidence
-
-let build_estimators properties =
-  List.fold_left
-    (fun estimators property ->
-       let name = property.name in
-       if Smap.mem name estimators then
-         estimators
-       else
-         let new_estimator = Estimator.create () in
-         Smap.add name new_estimator estimators)
-    Smap.empty
-    properties
-
-let estimators_update config estimators violations =
-  let violated =
-    List.fold_left
-      (fun names name -> S.add name names)
-      S.empty violations in
-
-  Smap.iter
-    (fun name estimator ->
-       if not @@ Estimator.finished config estimator then
-         Estimator.observe config estimator ~violation:(S.mem name violated))
-    estimators
-
-let estimators_finished config estimators =
-  Smap.for_all (fun _ estimator -> Estimator.finished config estimator) estimators
-
-let estimators_results estimators : (string * Estimator.result) list =
-  Smap.fold
-    (fun name estimator results ->
-       (name, Estimator.result estimator)
-       :: results)
-    estimators []
-  |> List.rev
 
 let value_of_term values term =
   match
     List.find_opt
       (fun (queried_term, _) ->
-        Term.equal queried_term term)
+         Term.equal queried_term term)
       values
   with
   | Some (_, value) -> value
@@ -212,6 +298,7 @@ let value_of_term values term =
       Term.pp_print_term
       term;
     raise (Failure "main")
+
 
 let violations_of_values props values =
   List.fold_left
@@ -233,34 +320,65 @@ let violations_of_values props values =
     []
     props
 
-type solver_mode = [ `INCREMENTAL | `ONESHOT ]
 
-let run_one_solver_setup solver trans_sys last_instant =
-  let solver_setup_incremental solver = SMTSolver.push_solver; solver in
-  let solver_setup_oneshot solver =
-    let logic = TransSys.get_logic trans_sys in
-    let solver = Flags.Smt.solver ()
-      |> SMTSolver.create_instance ~produce_models:false logic in
-    TransSys.define_and_declare_of_bounds
-      trans_sys
-      (SMTSolver.define_fun solver)
-      (SMTSolver.declare_fun solver)
-      (SMTSolver.declare_sort solver)
-      Numeral.(~- one) Numeral.(of_int last_instant) ;
-    TransSys.assert_global_constraints trans_sys (SMTSolver.assert_term solver) ;
-    SMTSolver.assert_term solver
-      (TransSys.init_of_bound (Some (SMTSolver.declare_fun solver))
-         trans_sys Numeral.zero);
-    assert_trans solver trans_sys (Numeral.of_int last_instant);
-    solver
-
-  if Flags.SMC.solver_mode () = `INCREMENTAL then solver_setup_incremental solver
-  else solver_setup_oneshot solver
+(* -------------------------------------------------------------------------- *)
+(* Estimators                                                                 *)
+(* -------------------------------------------------------------------------- *)
 
 
-let run_one_solver_cleanup solver =
-  if Flags.SMC.solver_mode () = `INCREMENTAL then SMTSolver.pop solver
-  else SMTSolver.delete_instance solver
+let make_estimator_config ~runs ~precision ~confidence =
+  match Flags.SMC.estimator () with
+  | `FIXED -> Estimator.make_fixed ~runs ~precision
+  | `APMC -> Estimator.make_apmc ~precision ~confidence
+
+
+let build_estimators properties =
+  List.fold_left
+    (fun estimators property ->
+       let name = property.name in
+       if Smap.mem name estimators then
+         estimators
+       else
+         let new_estimator = Estimator.create () in
+         Smap.add name new_estimator estimators)
+    Smap.empty
+    properties
+
+
+let estimators_update config estimators violations =
+  let violated =
+    List.fold_left
+      (fun names name -> S.add name names)
+      S.empty
+      violations
+  in
+
+  Smap.iter
+    (fun name estimator ->
+       if not @@ Estimator.finished config estimator then
+         Estimator.observe config estimator ~violation:(S.mem name violated))
+    estimators
+
+
+let estimators_finished config estimators =
+  Smap.for_all
+    (fun _ estimator ->
+       Estimator.finished config estimator)
+    estimators
+
+
+let estimators_results estimators : (string * Estimator.result) list =
+  estimators
+  |> Smap.bindings
+  |> List.map
+    (fun (name, estimator) ->
+       name,
+       Estimator.result estimator)
+
+
+(* -------------------------------------------------------------------------- *)
+(* Trace Engine                                                               *)
+(* -------------------------------------------------------------------------- *)
 
 
 type run_result =
@@ -268,24 +386,26 @@ type run_result =
   | Rejected
 
 
+let solve_trace solver input_equations properties =
+  SMTSolver.assert_term
+    solver
+  @@ Term.mk_and input_equations;
+
+  (* TODO: recover timing monitoring *)
+  (*  let _start = Unix.gettimeofday () in
+      let _stop = Unix.gettimeofday () in *)
 (*
- * Random traces are sampled from the base input distribution and
- * rejected if they are incompatible with the transition-system
- * constraints.
- *
- * Hence accepted traces are distributed according to the base
- * distribution conditioned on feasibility over the complete horizon.
- *)
-let run_one solver run trans_sys last_instant ranges distributions inputs steps properties =
-  (* Build random input equations *)
-  let input_equations =
-    build_random_input_equations ranges distributions inputs steps in
+  KEvent.log L_debug
+    "SMC run %d: %.6fs"
+    run
+    (_stop -. _start); *)
 
-  let solver = run_one_solver_setup solver trans_sys last_instant in
-
-  SMTSolver.assert_term solver @@ Term.mk_and input_equations;
 
   (* Solver continuations *)
+  let if_unsat _solver =
+    Rejected
+  in
+
   let if_sat _solver values =
     let violations =
       violations_of_values
@@ -293,34 +413,136 @@ let run_one solver run trans_sys last_instant ranges distributions inputs steps 
         values in
     Accepted violations
   in
-  let if_unsat _solver = Rejected in
-  let _start = Unix.gettimeofday () in
-  let result =
-    if properties = [] then
-      SMTSolver.check_sat_assuming
-        solver
-        (fun _solver -> Accepted [])
-        if_unsat
-        [Term.mk_true ()] (*[actlit]*)
-    else
-      SMTSolver.check_sat_and_get_term_values
-        solver
-        if_sat
-        if_unsat
-        (List.map (fun property -> property.term) properties) in
-  let _stop = Unix.gettimeofday () in
+
+  (* Solver calls *)
+  if properties = [] then
+    SMTSolver.check_sat_assuming
+      solver
+      (fun _solver -> Accepted [])
+      if_unsat
+      [Term.mk_true ()]
+  else
+    SMTSolver.check_sat_and_get_term_values
+      solver
+      if_sat
+      if_unsat
+      (List.map (fun property -> property.term) properties)
+
+
 (*
-  KEvent.log L_debug
-    "SMC run %d: %.6fs"
-    run
-    (_stop -. _start); *)
-  run_one_solver_cleanup solver;
-  result
+ * Random traces are sampled from the base input distribution and
+ * rejected if they are incompatible with the transition-system
+ * constraints.
+ *)
+let run_one
+    ~solver
+    ~trans_sys
+    ~last_instant
+    ~input_ranges
+    ~input_distributions
+    ~inputs
+    ~steps
+    ~properties =
+
+  (* Build random input equations *)
+  let input_equations =
+    build_random_input_equations
+      input_ranges
+      input_distributions
+      inputs
+      steps
+  in
+
+  match Flags.SMC.solver_mode () with
+  | `INCREMENTAL ->
+    begin
+      match solver with
+      | Some solver ->
+        with_incremental_frame
+          solver
+          (fun solver ->
+             solve_trace
+               solver
+               input_equations
+               properties)
+      | None ->
+        KEvent.log
+          L_error
+          "SMC: internal error: incremental solver not initialized";
+        raise (Failure "main")
+    end
+  | `ONESHOT ->
+    with_solver
+      trans_sys
+      last_instant
+      (fun solver ->
+         solve_trace
+           solver
+           input_equations
+           properties)
+
+
+(* -------------------------------------------------------------------------- *)
+(* Main Routines                                                              *)
+(* -------------------------------------------------------------------------- *)
+
+
+let run
+    ~solver
+    ~estimator_config
+    ~estimators
+    ~statistics
+    ~trans_sys
+    ~last_instant
+    ~input_ranges
+    ~input_distributions
+    ~inputs
+    ~steps
+    ~properties =
+  let generated = ref 0 in
+
+  (* TODO: add maximum iteration credit *)
+  while not @@ estimators_finished estimator_config estimators do
+    incr generated;
+    statistics := Report.inc_generated !statistics;
+
+    if !generated mod 10 = 0 then
+      KEvent.progress @@ Report.accepted !statistics;
+
+    let run_status =
+      run_one
+        ~solver
+        ~trans_sys
+        ~last_instant
+        ~input_ranges
+        ~input_distributions
+        ~inputs
+        ~steps
+        ~properties in
+
+    match run_status with
+    | Rejected ->
+      (* The sampled trace is incompatible with the transition-system
+       * constraints and therefore does not count as an estimator sample.
+      *)
+      statistics := Report.inc_rejected !statistics
+
+    | Accepted [] ->
+      (* The sample trace is feasible, and does not violate any property. *)
+      statistics := Report.inc_accepted !statistics;
+
+      estimators_update estimator_config estimators []
+
+    | Accepted violations ->
+      (* The sampled trace is feasibla and does violate a property. *)
+      statistics := Report.inc_accepted !statistics;
+
+      estimators_update estimator_config estimators violations
+  done
 
 
 (* Main entry point *)
-let main  (* input_file *) input_sys _ trans_sys =
-
+let main  input_sys _ trans_sys =
   KEvent.set_module `SMC;
 
   Rand.init ();
@@ -328,6 +550,8 @@ let main  (* input_file *) input_sys _ trans_sys =
   let trans_svars = TransSys.state_vars trans_sys in
 
   let inputs = List.filter StateVar.is_input trans_svars in
+
+  (******************************* Configuration ******************************)
 
   let steps = Flags.SMC.steps () in
 
@@ -347,105 +571,82 @@ let main  (* input_file *) input_sys _ trans_sys =
 
   KEvent.log L_info "SMC: %d runs of %d steps" runs steps;
 
-  (* Build estimator config *)
   let precision = Flags.SMC.precision () in
   let confidence = Flags.SMC.confidence () in
-  let estimator_config = estimator_config ~runs ~precision ~confidence in
 
-  (* Build input ranges *)
-  let input_ranges = Range.input_ranges input_sys trans_sys in
-
-  (* Build input distributions *)
-  let input_distributions =
-    match Flags.SMC.input_file () with
-    | None -> Input.empty
-    | Some file ->
-      begin
-        try
-          Input.of_file file
-        with Invalid_argument message ->
-          KEvent.log
-            L_error
-            "%s"
-            message;
-          raise (Failure "main")
-      end
+  let estimator_config =
+    make_estimator_config
+      ~runs
+      ~precision
+      ~confidence
   in
-  validate_input_distributions inputs input_distributions;
-
-  Input.iter
-    (fun name spec ->
-       KEvent.log
-         L_info "SMC input %s: %a" name Input.pp spec)
-    input_distributions;
-
-  (* Build property terms *)
-  let properties = build_property_terms trans_sys steps in
-
-  (* Build estimators *)
-  let estimators = build_estimators properties in
-
-  (* Determine logic for the SMT solver *)
-  let logic = TransSys.get_logic trans_sys in
-
-  (* Create solver instance *)
-  let solver =
-    Flags.Smt.solver ()
-    |> SMTSolver.create_instance ~produce_models:false logic
-  in
-
-  (* Create a reference for the solver. Only used in on_exit. *)
-  ref_solver := Some solver;
 
   let last_instant = steps - 1 in
 
-  (* Defining uf's and declaring variables. *)
-  TransSys.define_and_declare_of_bounds
-    trans_sys
-    (SMTSolver.define_fun solver)
-    (SMTSolver.declare_fun solver)
-    (SMTSolver.declare_sort solver)
-     Numeral.(~- one) Numeral.(of_int last_instant) ;
+  (********************************** Inputs **********************************)
 
-  TransSys.assert_global_constraints trans_sys (SMTSolver.assert_term solver) ;
+  let input_ranges = Range.input_ranges input_sys trans_sys in
 
-  (* Assert initial state constraint *)
-  SMTSolver.assert_term solver
-      (TransSys.init_of_bound (Some (SMTSolver.declare_fun solver))
-         trans_sys Numeral.zero);
+  let input_distributions = load_input_distributions () in
 
-  (* Assert transition relation up to number of steps *)
-  assert_trans solver trans_sys (Numeral.of_int last_instant);
+  validate_input_distributions inputs input_distributions;
 
-  let statistics = ref (Report.make ~generated:0 ~accepted:0 ~rejected:0) in
-  let run = ref 0 in
-  (* TODO: add maximum iteration credit *)
-  while not @@ estimators_finished estimator_config estimators do
-    run := !run + 1;
-    statistics := Report.inc_generated !statistics;
+  log_input_distributions input_distributions;
 
-    if !run mod 1000 = 0 then
-      KEvent.progress @@ Report.accepted !statistics;
+  (************************ Properties and Estimators *************************)
 
-    let run_status =
-      run_one solver !run trans_sys last_instant input_ranges input_distributions inputs steps properties in
-    match run_status with
-    | Rejected ->
-      (* Trace is rejected because of transition system constraints. *)
-      statistics := Report.inc_rejected !statistics
+  let properties = build_property_terms trans_sys steps in
 
-    | Accepted [] ->
-      (* Trace is accepted without any violation. *)
-      statistics := Report.inc_accepted !statistics;
+  let estimators = build_estimators properties in
 
-      estimators_update estimator_config estimators []
+  let statistics = ref
+      (Report.make
+         ~generated:0
+         ~accepted:0
+         ~rejected:0)
+  in
 
-    | Accepted violations ->
-      (* Trace is accepted without having one or multiple property violation detected. *)
-      statistics := Report.inc_accepted !statistics;
+  (******************************** Execution *********************************)
 
-      estimators_update estimator_config estimators violations
-  done;
+  begin
+    match Flags.SMC.solver_mode () with
+    | `INCREMENTAL ->
+      (* Build the transition system once and reuse the solver *)
+      with_solver
+        trans_sys
+        last_instant
+        (fun solver ->
+           run
+             ~solver:(Some solver)
+             ~estimator_config
+             ~estimators
+             ~statistics
+             ~trans_sys
+             ~last_instant
+             ~input_ranges
+             ~input_distributions
+             ~inputs
+             ~steps
+             ~properties)
+
+    | `ONESHOT ->
+      (* Each trace receives a fresh solver. *)
+      (run
+         ~solver:None
+         ~estimator_config
+         ~estimators
+         ~statistics
+         ~trans_sys
+         ~last_instant
+         ~input_ranges
+         ~input_distributions
+         ~inputs
+         ~steps
+         ~properties)
+  end;
+
+  (* ******************************** Report ******************************** *)
+
 
   !statistics
   |> Report.render
