@@ -22,6 +22,8 @@ open Actlit
 
 module Rand = SmcRand
 module Report = SmcReport
+module Input = SmcInput
+module Hmap = SmcInput.HMap
 
 (* Solver instance if created *)
 let ref_solver = ref None
@@ -65,18 +67,23 @@ let build_input_equation state_var instant value =
 
   Term.mk_eq [var; value]
 
-let build_random_input_equations inputs steps =
+let build_random_input_equations ranges inputs steps =
   let equations = ref [] in
   List.iter
     (fun state_var ->
+       let random_value () =
+         let name = HString.mk_hstring (StateVar.name_of_state_var state_var) in
+         let range = Hmap.find_opt name ranges in
+         state_var |> StateVar.type_of_state_var |> (Rand.random_value ~range)
+       in
        if StateVar.is_const state_var then
-         let value = state_var |> StateVar.type_of_state_var |> Rand.random_value in
+         let value = random_value () in
          for instant = 0 to steps - 1 do
            equations := build_input_equation state_var instant value :: !equations
          done
        else
          for instant = 0 to steps - 1 do
-           let value = state_var |> StateVar.type_of_state_var |> Rand.random_value in
+           let value = random_value () in
            equations := build_input_equation state_var instant value :: !equations
          done
     ) inputs;
@@ -160,9 +167,9 @@ type run_result =
  * Hence accepted traces are distributed according to the base
  * distribution conditioned on feasibility over the complete horizon.
  *)
-let run_one solver inputs steps properties =
+let run_one solver ranges inputs steps properties =
   (* Build random input equations *)
-  let input_equations = build_random_input_equations inputs steps in
+  let input_equations = build_random_input_equations ranges inputs steps in
 
   (* Build and assert input term using activation litterals *)
   let actlit_uf = fresh_actlit () in
@@ -229,6 +236,10 @@ let main  (* input_file *) input_sys _ trans_sys =
 
   KEvent.log L_info "SMC: %d runs of %d steps" runs steps;
 
+  (* Build input ranges *)
+  let input_ranges = Input.input_ranges input_sys trans_sys in
+
+  (* Build property terms *)
   let properties = build_property_terms trans_sys steps in
 
   (* Determine logic for the SMT solver *)
@@ -273,7 +284,7 @@ let main  (* input_file *) input_sys _ trans_sys =
     if !run mod 1000 = 0 then
       KEvent.progress @@ Report.accepted !statistics;
 
-    match run_one solver inputs steps properties with
+    match run_one solver input_ranges inputs steps properties with
     | Rejected ->
       (* Trace is rejected because of transition system constraints. *)
       statistics := Report.inc_rejected !statistics

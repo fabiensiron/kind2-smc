@@ -73,11 +73,19 @@ let random_int min max =
 let random_bool () =
   Random.bool ()
 
-let random_value ty =
+let random_value ~range ty =
   match Type.node_of_type ty with
   | Type.Bool -> random_bool () |> Term.mk_bool
   | Type.Int ->
-    random_int !int_min !int_max |> Numeral.of_int |> Term.mk_num
+    let min, max =
+      match range with
+      | Some (Some min, Some max) -> min, max
+      | Some (Some min, None) -> min, !int_max
+      | Some (None, Some max) -> !int_min, max
+      | Some (None, None)
+      | None -> !int_min, !int_max
+    in
+    random_int min max |> Numeral.of_int |> Term.mk_num
   | Type.IntRange (Some lb, Some ub) ->
     random_int (Numeral.to_int lb) (Numeral.to_int ub) |> Numeral.of_int |> Term.mk_num
   | Type.IntRange (None, Some ub) ->

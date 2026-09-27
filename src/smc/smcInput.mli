@@ -16,6 +16,10 @@
 
 *)
 
-val init : unit -> unit
+module HMap = HString.HStringMap
 
-val random_value : range:((int option * int option) option) -> Type.t -> Term.t
+
+val input_ranges :
+  'a InputSystem.t ->
+  TransSys.t ->
+  (int option * int option) HMap.t

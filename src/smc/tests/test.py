@@ -292,11 +292,36 @@ def test_constant_is_sampled_once(steps):
     ],
 )
 def test_integer_range(steps):
-    # FIXME : subrange doesn't work !
     expected = 1.0 - (9.0 / 10.0) ** steps
     output = run_smc(
         "range.lus",
         params=["--smc_int_min", "0", "--smc_int_max", "9"],
+        runs=2000,
+        steps=1,
+    )
+
+    # x is uniform in [0,9].
+    #
+    # Property fails exactly when x = 0.
+    assert_close(
+        probability(output, "nonzero"),
+        expected=0.1,
+        tolerance=0.04,
+    )
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        (1),
+        (2),
+        (5),
+        (10),
+    ],
+)
+def test_integer_subrange(steps):
+    expected = 1.0 - (9.0 / 10.0) ** steps
+    output = run_smc(
+        "subrange.lus",
         runs=2000,
         steps=1,
     )
@@ -369,6 +394,67 @@ def test_rejection_sampling(steps):
     output = run_smc(
         "assumes.lus",
         params=["--smc_int_min", "0", "--smc_int_max", "9"],
+        runs=2000,
+        steps=steps,
+    )
+
+    generated, accepted, rejected = sample_counts(output)
+
+    assert accepted == 2000
+
+    assert generated == accepted + rejected
+
+    # x,y are uniform in [0,9].
+    #
+    # There are 100 possible pairs and 45 satisfying x < y.
+    #
+    # Therefore:
+    #
+    #   P(accepted) = 45 / 100 = 0.45
+    #
+    acceptance_probability = (
+        accepted / generated
+    )
+
+    expected = 0.45 ** steps
+
+    assert_close(
+        acceptance_probability,
+        expected=expected,
+        tolerance=0.05,
+    )
+
+    # Among the 45 legal pairs:
+    #
+    #   (0,1), ..., (0,9)
+    #
+    # are the 9 pairs for which x = 0.
+    #
+    # Thus:
+    #
+    #   P(x = 0 | x < y) = 9 / 45 = 0.2
+    #
+    expected = 1.0 - 0.8 ** steps
+    assert_close(
+        probability(
+            output,
+            "nonzero_x",
+        ),
+        expected=expected,
+        tolerance=0.05,
+    )
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        (1),
+        (2),
+    ],
+)
+def test_rejection_sampling_subrange(steps):
+    output = run_smc(
+        "subrange_assumes.lus",
         runs=2000,
         steps=steps,
     )
