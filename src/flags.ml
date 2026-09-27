@@ -2690,6 +2690,20 @@ module SMC = struct
       )
   let seed () = !seed
 
+
+  let precision_default = 0.01
+  let precision = ref precision_default
+  let _ = add_spec
+    "--smc_precision"
+    (Arg.Set_float precision)
+    (fun fmt ->
+       Format.fprintf fmt
+         "@[<v>\
+          Precision of confidence estimation
+        @]"
+    )
+  let precision () = !precision
+
   let runs_default = 10
   let runs = ref runs_default
   let _ = add_spec

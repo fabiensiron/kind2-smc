@@ -818,6 +818,9 @@ module SMC : sig
   (** Seed to initialize the random engine. *)
   val seed : unit -> int option
 
+  (** Precision for confidence estimation. *)
+  val precision : unit -> float
+
   (** Number of independant random runs. *)
   val runs : unit -> int
 

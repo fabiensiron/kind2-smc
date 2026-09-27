@@ -27,39 +27,13 @@ type t = {
   generated : int ;
   accepted : int ;
   rejected : int ;
-  properties : int Smap.t ;
 }
 
-let make ~generated ~accepted ~rejected properties =
+let make ~generated ~accepted ~rejected =
   {
     generated ;
     accepted ;
     rejected ;
-    properties =
-      List.fold_left (fun smap (name, _, _) ->
-          Smap.add name 0 smap
-      ) Smap.empty properties
-  }
-
-let property_results properties =
-  List.map
-    (fun (name, violations) ->
-       { name ; violations })
-  @@ Smap.to_list properties
-
-let add_violations stats violations =
-  {
-    stats with
-    properties =
-      List.fold_left
-        (fun properties (name, _) ->
-           match Smap.find_opt name properties with
-           | Some count ->
-             Smap.add name (count + 1) properties
-           | None ->
-             KEvent.log L_error "SMC report: unknown property %s" name;
-             raise (Failure "main")
-        ) stats.properties violations
   }
 
 let inc_generated stats =
@@ -81,12 +55,6 @@ let accepted stats = stats.accepted
 let rejected stats = stats.rejected
 let generated stats = stats.generated
 
-let probability accepted violations =
-  if accepted = 0 then
-    None
-  else
-    Some (float_of_int violations /. float_of_int accepted)
-
 let pp_probability fmt p =
   Format.fprintf fmt
     "@{<b>%.6g@}" p
@@ -97,28 +65,67 @@ let pp_violations fmt n =
   else
     Format.fprintf fmt "@{<red_b>%d@}" n
 
-let pp_property_pt accepted fmt p =
-  match probability accepted p.violations with
-  | None ->
-    Format.fprintf fmt
-      "@[<h>  Property @{<blue_b>%s@}: \
-       violations = %d / 0, probability = @{<yellow_b>n/a@}@]"
-      p.name
-      p.violations
-  | Some probability ->
-    Format.fprintf fmt
-      "@[<h>  Property @{<blue_b>%s@}: \
-       violations = %a / %d, probability = %a@]"
-      p.name
-      pp_violations p.violations
-      accepted
-      pp_probability probability
+let pp_estimator_pt fmt config =
+  match config with
+  | SmcEstimator.Fixed { runs ; precision } ->
+    let confidence = SmcEstimator.confidence config in
 
-let pp_pt fmt result =
+    Format.fprintf fmt
+      "@[<v>\
+       @{<b>Estimator@}@,\
+       @[<h>  Method     : Fixed@]@,\
+       @[<h>  Runs       : %d@]@,\
+       @[<h>  Precision  : ±%.6g@]@,\
+       @[<h>  Confidence : @{<b>>= %.4f%%@}@]\
+       @]@,"
+      runs precision (100.0 *. confidence)
+
+(* let pp_property_pt accepted fmt p = *)
+(*   match probability accepted p.violations with *)
+(*   | None -> *)
+(*     Format.fprintf fmt *)
+(*       "@[<h>  Property @{<blue_b>%s@}: \ *)
+(*        violations = %d / 0, probability = @{<yellow_b>n/a@}@]" *)
+(*       p.name *)
+(*       p.violations *)
+(*   | Some probability -> *)
+(*     Format.fprintf fmt *)
+(*       "@[<h>  Property @{<blue_b>%s@}: \ *)
+(*        violations = %a / %d, probability = %a@]" *)
+(*       p.name *)
+(*       pp_violations p.violations *)
+(*       accepted *)
+(*       pp_probability probability *)
+
+let pp_property_pt precision fmt (name, estimate) =
+  let lower = max 0.0 (estimate.SmcEstimator.probability -. precision) in
+  let upper = min 1.0 (estimate.SmcEstimator.probability +. precision) in
+
+  Format.fprintf fmt
+    "@[<v 2>\
+     @[<h>  Property @{<blue_b>%s@}:@]@,\
+     @[<h>    Violations : %a / %d@]@,\
+     @[<h>    Estimate   : %a@]@,\
+     @[<h>    Interval   : [%.6g, %.6g]@]\
+     @]"
+    name
+    pp_violations
+    estimate.SmcEstimator.violations
+    estimate.SmcEstimator.samples
+    pp_probability estimate.SmcEstimator.probability
+    lower
+    upper
+
+let pp_pt fmt config estimates result =
+  let precision =
+    match config with
+    | SmcEstimator.Fixed { precision ; _ } -> precision in
   Format.fprintf fmt
     "@[<v>\
     %a\
     @{<b>Statistical Model-Checking Result@}@,\
+    %a\
+    @,\
     %a\
     @,\
     @{<b>Samples@}@,\
@@ -129,25 +136,26 @@ let pp_pt fmt result =
     @{<b>Property estimates@}"
     Pretty.print_line ()
     Pretty.print_line ()
+    pp_estimator_pt config
     result.generated
     result.accepted
     result.rejected;
-  if Smap.cardinal result.properties <> 0 then
+  if estimates <> [] then
     Format.fprintf fmt
       "@,%a"
       (Format.pp_print_list
          ~pp_sep:(fun fmt () -> Format.fprintf fmt "@,")
-         (pp_property_pt result.accepted))
-      (property_results result.properties);
+         (pp_property_pt precision) )
+      estimates;
   Format.fprintf fmt "@,@,@]"
 
 let pp_xml = pp_pt (* TODO *)
 let pp_json = pp_pt (* TODO *)
 
-let render result : KEvent.rendered_result =
+let render ~config ~estimates result : KEvent.rendered_result =
   {
-    plain =  (fun fmt -> pp_pt fmt result) ;
-    xml = (fun fmt -> pp_xml fmt result) ;
-    json = (fun fmt -> pp_json fmt result) ;
+    plain =  (fun fmt -> pp_pt fmt config estimates result) ;
+    xml = (fun fmt -> pp_xml fmt config estimates result) ;
+    json = (fun fmt -> pp_json fmt config estimates result) ;
   }
   

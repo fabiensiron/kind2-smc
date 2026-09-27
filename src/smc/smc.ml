@@ -22,8 +22,11 @@ open Actlit
 
 module Rand = SmcRand
 module Report = SmcReport
+module Estimator = SmcEstimator
 module Input = SmcInput
 module Hmap = SmcInput.HMap
+module Smap = Map.Make(String)
+module S = Set.Make(String)
 
 (* Solver instance if created *)
 let ref_solver = ref None
@@ -114,7 +117,39 @@ let build_property_terms trans_sys steps =
        add_instant 0 acc)
     []
 
-module Smap = Map.Make(String)
+let build_estimators properties =
+  List.fold_left
+    (fun estimators (name, _, _) ->
+       if Smap.mem name estimators then
+         estimators
+       else
+         let new_estimator = Estimator.create () in
+         Smap.add name new_estimator estimators)
+    Smap.empty
+    properties
+
+let estimators_update config estimators violations =
+  let violated =
+    List.fold_left
+      (fun names (name, _) -> S.add name names)
+      S.empty violations in
+
+  Smap.iter
+    (fun name estimator ->
+       if not @@ Estimator.finished config estimator then
+         Estimator.observe config estimator ~violation:(S.mem name violated))
+    estimators
+
+let estimators_finished config estimators =
+  Smap.for_all (fun _ estimator -> Estimator.finished config estimator) estimators
+
+let estimators_results estimators : (string * Estimator.result) list =
+  Smap.fold
+    (fun name estimator results ->
+       (name, Estimator.result estimator)
+       :: results)
+    estimators []
+  |> List.rev
 
 let value_of_term values term =
   match
@@ -236,11 +271,18 @@ let main  (* input_file *) input_sys _ trans_sys =
 
   KEvent.log L_info "SMC: %d runs of %d steps" runs steps;
 
+  (* Build estimator config *)
+  let precision = Flags.SMC.precision () in
+  let estimator_config = Estimator.make_fixed ~runs ~precision in
+
   (* Build input ranges *)
   let input_ranges = Input.input_ranges input_sys trans_sys in
 
   (* Build property terms *)
   let properties = build_property_terms trans_sys steps in
+
+  (* Build estimators *)
+  let estimators = build_estimators properties in
 
   (* Determine logic for the SMT solver *)
   let logic = TransSys.get_logic trans_sys in
@@ -274,10 +316,10 @@ let main  (* input_file *) input_sys _ trans_sys =
   (* Assert transition relation up to number of steps *)
   assert_trans solver trans_sys (Numeral.of_int last_instant);
 
-  let statistics = ref (Report.make ~generated:0 ~accepted:0 ~rejected:0 properties) in
+  let statistics = ref (Report.make ~generated:0 ~accepted:0 ~rejected:0) in
   let run = ref 0 in
   (* TODO: add maximum iteration credit *)
-  while Report.accepted !statistics < runs do
+  while not @@ estimators_finished estimator_config estimators do
     run := !run + 1;
     statistics := Report.inc_generated !statistics;
 
@@ -288,17 +330,24 @@ let main  (* input_file *) input_sys _ trans_sys =
     | Rejected ->
       (* Trace is rejected because of transition system constraints. *)
       statistics := Report.inc_rejected !statistics
+
     | Accepted [] ->
       (* Trace is accepted without any violation. *)
-      statistics := Report.inc_accepted !statistics
+      statistics := Report.inc_accepted !statistics;
+
+      estimators_update estimator_config estimators []
+
     | Accepted violations ->
       (* Trace is accepted without having one or multiple property violation detected. *)
       statistics := Report.inc_accepted !statistics;
-      statistics := Report.add_violations !statistics violations
+
+      estimators_update estimator_config estimators violations
   done;
 
   !statistics
   |> Report.render
+    ~config:estimator_config
+    ~estimates:(estimators_results estimators)
   |> KEvent.result
 
 (*

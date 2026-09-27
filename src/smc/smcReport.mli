@@ -18,15 +18,18 @@
 
 type t
 
-val make : generated:int -> accepted:int -> rejected:int -> (string * int * Term.t) list -> t
+val make : generated:int -> accepted:int -> rejected:int -> t
 
 val accepted : t -> int
 val generated : t -> int
 val rejected : t -> int
 
-val add_violations : t -> (string * int) list -> t
 val inc_generated : t -> t
 val inc_accepted : t -> t
 val inc_rejected : t -> t
 
-val render : t -> KEvent.rendered_result
+val render :
+  config:SmcEstimator.config ->
+  estimates:(string * SmcEstimator.result) list ->
+  t ->
+  KEvent.rendered_result
