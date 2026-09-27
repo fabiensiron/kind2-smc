@@ -20,6 +20,7 @@ depends: [
   "dune-build-info"
   "menhir" {>= "20181026"}
   "num"
+  "progress" {>= "0.5.0"}
   "odoc" {with-doc & >= "3.0"}
   "ounit2" {with-test}
   "yojson"

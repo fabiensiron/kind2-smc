@@ -28,6 +28,16 @@ val inc_generated : t -> t
 val inc_accepted : t -> t
 val inc_rejected : t -> t
 
+type progress
+
+val with_progress :
+  config:SmcEstimator.config ->
+  (progress -> 'a) ->
+  'a
+
+val progress_accepted : progress -> unit
+val progress_rejected : progress -> unit
+
 val render :
   config:SmcEstimator.config ->
   estimates:(string * SmcEstimator.result) list ->

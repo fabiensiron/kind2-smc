@@ -18,6 +18,12 @@
 
 module Smap = Map.Make(String)
 
+
+(* -------------------------------------------------------------------------- *)
+(* Global Statistics                                                          *)
+(* -------------------------------------------------------------------------- *)
+
+
 type property_result = {
   name : string ;
   violations : int ;
@@ -38,22 +44,80 @@ let make ~generated ~accepted ~rejected =
 
 let inc_generated stats =
   {
-    stats with generated = stats.generated + 1
+    stats with
+    generated = stats.generated + 1
   }
 
 let inc_accepted stats =
   {
-    stats with accepted = stats.accepted + 1
+    stats with
+    accepted = stats.accepted + 1
   }
 
 let inc_rejected stats =
   {
-    stats with rejected = stats.rejected + 1
+    stats with
+    rejected = stats.rejected + 1
   }
 
 let accepted stats = stats.accepted
 let rejected stats = stats.rejected
 let generated stats = stats.generated
+
+
+(* -------------------------------------------------------------------------- *)
+(* Progress Bar                                                               *)
+(* -------------------------------------------------------------------------- *)
+
+
+type progress = int -> unit
+
+let progress_line total =
+  let open Progress.Line in
+  list
+    [
+      spinner ();
+      const "SMC";
+      bar
+        ~style:`UTF8
+        total;
+      count_to total;
+      percentage_of total;
+      brackets
+        (elapsed ());
+      parens
+        (const "eta: " ++ eta total);
+    ]
+
+
+let with_progress ~config f =
+  let total = SmcEstimator.runs config in
+  let progress_config =
+    Progress.Config.v
+      ~persistent:false
+      ~min_interval:
+        (Some (Progress.Duration.of_ms 100.0))
+      ()
+  in
+
+  Progress.with_reporter
+    ~config:progress_config
+    (progress_line total)
+    f
+
+
+let progress_accepted progress =
+  progress 1
+
+
+let progress_rejected progress =
+  progress 0
+
+
+(* -------------------------------------------------------------------------- *)
+(* Pretty Printing                                                            *)
+(* -------------------------------------------------------------------------- *)
+
 
 let pp_probability fmt p =
   Format.fprintf fmt

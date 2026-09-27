@@ -27,6 +27,7 @@ More advanced features include contract-based compositional verification, proof 
   (menhir
    (>= 20181026)) ; moxiParser.mly uses "token aliases", which were added in menhir 20181026
   num
+  (progress (>= 0.5.0))
   (odoc
    (and
     :with-doc

@@ -488,6 +488,7 @@ let run_one
 
 
 let run
+    ~progress
     ~solver
     ~estimator_config
     ~estimators
@@ -499,15 +500,10 @@ let run
     ~inputs
     ~steps
     ~properties =
-  let generated = ref 0 in
 
   (* TODO: add maximum iteration credit *)
   while not @@ estimators_finished estimator_config estimators do
-    incr generated;
     statistics := Report.inc_generated !statistics;
-
-    if !generated mod 10 = 0 then
-      KEvent.progress @@ Report.accepted !statistics;
 
     let run_status =
       run_one
@@ -525,19 +521,25 @@ let run
       (* The sampled trace is incompatible with the transition-system
        * constraints and therefore does not count as an estimator sample.
       *)
-      statistics := Report.inc_rejected !statistics
+      statistics := Report.inc_rejected !statistics;
+
+      Report.progress_rejected progress
 
     | Accepted [] ->
       (* The sample trace is feasible, and does not violate any property. *)
       statistics := Report.inc_accepted !statistics;
 
-      estimators_update estimator_config estimators []
+      estimators_update estimator_config estimators [];
+
+      Report.progress_accepted progress
 
     | Accepted violations ->
       (* The sampled trace is feasibla and does violate a property. *)
       statistics := Report.inc_accepted !statistics;
 
-      estimators_update estimator_config estimators violations
+      estimators_update estimator_config estimators violations;
+
+      Report.progress_accepted progress
   done
 
 
@@ -608,42 +610,45 @@ let main  input_sys _ trans_sys =
 
   (******************************** Execution *********************************)
 
-  begin
-    match Flags.SMC.solver_mode () with
-    | `INCREMENTAL ->
-      (* Build the transition system once and reuse the solver *)
-      with_solver
-        trans_sys
-        last_instant
-        (fun solver ->
-           run
-             ~solver:(Some solver)
-             ~estimator_config
-             ~estimators
-             ~statistics
-             ~trans_sys
-             ~last_instant
-             ~input_ranges
-             ~input_distributions
-             ~inputs
-             ~steps
-             ~properties)
+  Report.with_progress ~config:estimator_config
+    (fun progress ->
+       match Flags.SMC.solver_mode () with
+       | `INCREMENTAL ->
+         (* Build the transition system once and reuse the solver *)
+         with_solver
+           trans_sys
+           last_instant
+           (fun solver ->
+              run
+                ~progress
+                ~solver:(Some solver)
+                ~estimator_config
+                ~estimators
+                ~statistics
+                ~trans_sys
+                ~last_instant
+                ~input_ranges
+                ~input_distributions
+                ~inputs
+                ~steps
+                ~properties)
 
-    | `ONESHOT ->
-      (* Each trace receives a fresh solver. *)
-      (run
-         ~solver:None
-         ~estimator_config
-         ~estimators
-         ~statistics
-         ~trans_sys
-         ~last_instant
-         ~input_ranges
-         ~input_distributions
-         ~inputs
-         ~steps
-         ~properties)
-  end;
+       | `ONESHOT ->
+         (* Each trace receives a fresh solver. *)
+         (run
+            ~progress
+            ~solver:None
+            ~estimator_config
+            ~estimators
+            ~statistics
+            ~trans_sys
+            ~last_instant
+            ~input_ranges
+            ~input_distributions
+            ~inputs
+            ~steps
+            ~properties)
+    );
 
   (* ******************************** Report ******************************** *)
 
