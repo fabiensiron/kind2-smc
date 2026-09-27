@@ -65,10 +65,17 @@ sig
 
   type relay_message
 
+  type output_result = {
+    plain : Format.formatter -> unit;
+    xml : Format.formatter -> unit;
+    json : Format.formatter -> unit;
+  }
+
   type output_message =
     | Log of int * string
     | Stat of string
     | Progress of int
+    | Result of output_result
 
   type control_message =
     | Terminate
@@ -125,6 +132,12 @@ struct
   (* Message to be broadcast *)
   type relay_message = T.t
 
+  (* Module formatted result *)
+  type output_result = {
+    plain : Format.formatter -> unit;
+    xml : Format.formatter -> unit;
+    json : Format.formatter -> unit;
+  }
 
   (* Message to be output to the user *)
   type output_message =
@@ -137,6 +150,9 @@ struct
 
     (* Progress *)
     | Progress of int
+
+    (* Result *)
+    | Result of output_result
 
 
   (* Message internal to the messaging system *)
@@ -169,6 +185,9 @@ struct
 
     | OutputMessage (Progress k) ->
       Format.fprintf ppf "@[<h>PROGRESS %d@]" k
+
+    | OutputMessage (Result _) ->
+      Format.fprintf ppf "@[<v>RESULT@]"
 
     | ControlMessage Terminate ->
       Format.fprintf ppf "Terminate"

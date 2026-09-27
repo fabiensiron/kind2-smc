@@ -199,6 +199,42 @@ let terminate_worker id = EventMessaging.send_term_message_to id
 (* Start messaging for invariant manager *)
 let run_im : messaging_setup -> unit = fun ctx -> EventMessaging.run_im ctx
 
+(* ********************************************************************** *)
+(* Generic rendered results                                               *)
+(* ********************************************************************** *)
+
+type rendered_result = {
+  plain : Format.formatter -> unit;
+  xml : Format.formatter -> unit;
+  json : Format.formatter -> unit;
+}
+
+let pp_result_pt ppf result =
+  result.plain ppf
+
+let pp_result_xml ppf result =
+  result.xml ppf
+
+let pp_result_json ppf result =
+  result.json ppf
+
+let result (result : rendered_result) =
+
+  Stat.update_time Stat.total_time ;
+  Stat.update_time Stat.analysis_time ;
+
+  log_result pp_result_pt pp_result_xml pp_result_json result;
+
+  try
+
+    (* Send message *)
+    EventMessaging.send_output_message
+      (EventMessaging.Result
+        { plain = result.plain ; xml = result.xml ; json = result.json })
+
+  (* Don't fail if not initialized *)
+  with Messaging.NotInitialized -> ()
+
 
 (* ********************************************************************** *)
 (* Received statistics                                                    *)
@@ -2226,6 +2262,22 @@ let recv () =
 
                (* Store last received statistics *)
                last_stats := MdlMap.add mdl stats !last_stats;
+
+               (* No relay message *)
+               accum
+
+             (* Output result *)
+             | mdl, EventMessaging.OutputMessage (EventMessaging.Result result) -> 
+
+               let result =
+                 {
+                   plain = result.plain ;
+                   xml = result.xml ;
+                   json = result.json
+                 } in
+
+               (* Output on warn level *)
+               log_result pp_result_pt pp_result_xml pp_result_json result;
 
                (* No relay message *)
                accum

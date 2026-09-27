@@ -50,11 +50,19 @@ sig
 
   type relay_message
 
+  (** Module formatted result *)
+  type output_result = {
+    plain : Format.formatter -> unit;
+    xml : Format.formatter -> unit;
+    json : Format.formatter -> unit;
+  }
+
   (** A message to be output to the user *)
   type output_message =
     | Log of int * string  (** Log message with level *)
     | Stat of string       (** Statistics *)
     | Progress of int      (** Progress *)
+    | Result of output_result (** Result *)
 
   (** A message internal to the messaging system *)
   type control_message =

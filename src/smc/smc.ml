@@ -21,6 +21,7 @@ open Lib
 open Actlit
 
 module Rand = SmcRand
+module Report = SmcReport
 
 (* Solver instance if created *)
 let ref_solver = ref None
@@ -41,55 +42,6 @@ let on_exit _ =
        KEvent.log L_error
          "Error deleting solver_init: %s" 
          (Printexc.to_string e))
-
-(* Statistics environment and display *)
-module Statistics = struct
-  module V = Map.Make(String)
-  type t =
-    {
-      mutable generated : int;
-      mutable accepted : int;
-      mutable rejected : int;
-      mutable violations : int V.t;
-    }
-
-  let init props =
-    let s =
-      {
-        generated = 0;
-        accepted = 0;
-        rejected = 0;
-        violations = V.empty;
-      }
-    in
-    List.fold_left (fun s (name, _, _) ->
-        { s with violations = V.add name 0 s.violations }
-      )
-      s props
-
-  let add_violations s vs =
-    let vs =
-      List.fold_left (fun vs (name, _) ->
-          let update v = Some (succ @@ try Option.get v with _ -> 0) in
-          V.update name update vs
-        ) s.violations vs in
-    s.violations <- vs
-
-  let pp fmt s =
-    Format.fprintf fmt "@[<v>- SMC samples: generated=%d accepted=%d rejected=%d"
-      s.generated s.accepted s.rejected;
-    if s.accepted > 0 then
-      Format.fprintf fmt
-        "@,%a"
-        (Format.pp_print_list
-           ~pp_sep:(fun fmt () -> Format.fprintf fmt "@,")
-           (fun fmt (name, cnt) ->
-              let probability = float_of_int cnt /. float_of_int s.accepted in
-              Format.fprintf fmt "- SMC property %s: violations=%d/%d, p~=%g"
-                name cnt s.accepted probability))
-        (V.to_list s.violations);
-    Format.fprintf fmt "@]"
-end
 
 (* Assert transition relation for all steps below [i] *)
 let rec assert_trans solver t i =
@@ -254,7 +206,6 @@ let main  (* input_file *) input_sys _ trans_sys =
   KEvent.log L_info "SMC: %d runs of %d steps" runs steps;
 
   let properties = build_property_terms trans_sys steps in
-  let stats = Statistics.init properties in
 
   (* Determine logic for the SMT solver *)
   let logic = TransSys.get_logic trans_sys in
@@ -286,34 +237,33 @@ let main  (* input_file *) input_sys _ trans_sys =
   (* Assert transition relation up to number of steps *)
   assert_trans solver trans_sys (Numeral.of_int steps);
 
+  let statistics = ref (Report.make ~generated:0 ~accepted:0 ~rejected:0 properties) in
   let run = ref 0 in
-  while stats.accepted < runs do
+  while Report.accepted !statistics < runs do
     run := !run + 1;
-    stats.generated <- stats.generated + 1;
+    statistics := Report.inc_generated !statistics;
 
     if !run mod 1000 = 0 then
-      KEvent.progress stats.accepted;
+      KEvent.progress @@ Report.accepted !statistics;
 
     match run_one solver inputs steps properties with
     | Rejected ->
       (* Trace is rejected because of transition system constraints. *)
-      stats.rejected <- stats.rejected + 1
+      statistics := Report.inc_rejected !statistics
     | Accepted [] ->
       (* Trace is accepted without any violation. *)
-      stats.accepted <- stats.accepted + 1
+      statistics := Report.inc_accepted !statistics
     | Accepted violations ->
       (* Trace is accepted without having one or multiple property violation detected. *)
-      stats.accepted <- stats.accepted + 1;
-      Statistics.add_violations stats violations
+      statistics := Report.inc_accepted !statistics;
+      statistics := Report.add_violations !statistics violations
   done;
-  let log = Format.asprintf "@[%a@]\n" Statistics.pp stats in
-  Printf.printf "Statistical Model-Checking Result:\n\n%s" log;
+
+  !statistics
+  |> Report.render
+  |> KEvent.result
+
 (*
-   KEvent.log L_warn
-     "@[<v>Statistical Model-Checking Result:@,@,%a@]"
-     Statistics.pp stats
-*)
-(* 
    Local Variables:
    compile-command: "make -C .. -k"
    tuareg-interactive-program: "./kind2.top -I ./_build -I ./_build/SExpr"

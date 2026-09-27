@@ -136,6 +136,14 @@ val pp_print_trace_json :
   -> string option (* property *) -> bool (* disproved *) -> Format.formatter
   -> (StateVar.t * Model.value list) list -> unit
 
+type rendered_result = {
+  plain : Format.formatter -> unit;
+  xml : Format.formatter -> unit;
+  json : Format.formatter -> unit;
+}
+
+val result : rendered_result -> unit
+
 (** {1 Events} *)
 
 (** Events exposed to callers *)
