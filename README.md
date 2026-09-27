@@ -8,6 +8,15 @@ class="align-middle" alt="release" />](https://github.com/kind2-mc/kind2/release
  
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/kind2-mc/kind2/blob/main/LICENSE.md)
 
+# Kind 2 Statistical Model Checking
+
+This fork of Kind 2 includes an experimental support for **Statistical Model Checking**.
+The SMC engine combines probabilistic input sampling with SMT-based bounded execution
+to estimate violation probabilities of Lustre invariant properties.
+
+The implementation is still experimental and its interface and performance may (and will)
+change. See [src/smc/README.md](src/smc/README.md) for usage, scope, and limitations.
+
 # Kind 2
 
 
