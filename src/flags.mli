@@ -793,9 +793,6 @@ module Interpreter : sig
   (** Read input from file. *)
   val input_file : unit -> string
 
-  (** Check that the properties do not make the system unsatisfiable. *)
-  val check_props : unit -> bool
-
   (** Run number of steps, override the number of steps given in the input
     file. *)
   val steps : unit -> int
@@ -810,6 +807,14 @@ module ContractMonitor : sig
   (** Run number of steps, override the number of steps given in the input
     file. *)
   val steps : unit -> int 
+end
+
+(** {2 SMC flags} *)
+module SMC : sig
+
+  (** Run number of steps, override the number of steps given in the input
+      file. *)
+  val steps : unit -> int
 end
 
 (** {2 LSP flags} *)

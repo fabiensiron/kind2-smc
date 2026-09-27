@@ -25,6 +25,7 @@ module Anal = Analysis
 module BMC = Base
 module IND = Step
 module IND2 = Step2
+module SMC = Smc
 (*module TestGen = TestgenDF*)
 module C2I = C2I
 (*module C2Icnf = C2Icnf*)
@@ -124,6 +125,7 @@ let main_of_process = function
     | `C2I -> C2I.main
     | `Interpreter -> Flags.Interpreter.input_file () |> Interpreter.main
     | `CMonitor ->  Flags.ContractMonitor.input_file () |> Interpreter.main ~contract_monitor:true
+    | `SMC -> SMC.main
     | `Supervisor -> assert false
     | `INVGENMACH | `INVGENMACHOS | `MCS | `CONTRACTCK
     | `Parser | `Certif -> ( fun _ _ _ -> () )
@@ -154,6 +156,7 @@ let on_exit_of_process mdl =
     | `INVGENREALOS -> InvGen.exit None
     | `C2I -> C2I.on_exit None
     | `Interpreter -> Interpreter.on_exit None
+    | `SMC -> SMC.on_exit None
     | `CMonitor -> Interpreter.on_exit None
     | `Supervisor -> InvarManager.on_exit None
     | `INVGENMACH | `INVGENMACHOS | `MCS | `CONTRACTCK

@@ -228,15 +228,6 @@ let main ?(contract_monitor=false) input_file input_sys _ trans_sys =
 
     inputs;
 
-  (* Assert properties if we also should check them. *)
-  if Flags.Interpreter.check_props () then
-    for i = 0 to steps - 1 do
-      TransSys.props_list_of_bound_no_skip trans_sys Numeral.zero
-      |> List.map (fun (_, term) -> Term.bump_state Numeral.((Numeral.of_int i)) term)
-      |> Term.mk_and
-      |> SMTSolver.assert_term solver
-    done;
-
   KEvent.log L_info 
     "Parsing interpreter input file %s"
     (Flags.input_file ()); 

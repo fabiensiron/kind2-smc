@@ -403,6 +403,7 @@ type kind_module =
   | `INVGENREALOS
   | `C2I
   | `Interpreter
+  | `SMC
   | `CMonitor
   | `Supervisor
   | `Parser

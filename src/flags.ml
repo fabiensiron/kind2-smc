@@ -2645,6 +2645,38 @@ module C2I = struct
   let modes () = !modes
 end
 
+(* SMC flags. *)
+module SMC = struct
+  include Make_Spec (struct end)
+
+  (* Identifier of the module. *)
+  let id = "smc"
+  (* Short description of the module. *)
+  let desc = "SMC flags"
+  (* Explanation of the module. *)
+  let fmt_explain fmt =
+    Format.fprintf fmt "@[<v>\
+      Statistical Model Checking (SMC) consists in generating random inputs@ \
+      and then report property failures using statistical estimators.
+    @]"
+
+  let steps_default = 0
+  let steps = ref steps_default
+  let _ = add_spec
+    "--smc_steps"
+    (Arg.Set_int steps)
+    (fun fmt ->
+      Format.fprintf fmt
+        "@[<v>\
+          Run number of steps, override the number of steps given in the@ \
+          input file@ \
+          Default: %d\
+        @]"
+        steps_default
+    )
+  let steps () = !steps
+
+end
 
 (* Interpreter flags. *)
 module Interpreter = struct
@@ -2671,20 +2703,6 @@ module Interpreter = struct
       Format.fprintf fmt "@[<v>Read input from file@]"
     )
   let input_file () = !input_file
-
-  let check_props_default = false
-  let check_props = ref check_props_default
-  let _ = add_spec
-    "--interpreter_check_properties"
-    (bool_arg check_props)
-    (fun fmt ->
-       Format.fprintf fmt "@[<v>\
-                           Check that the properties are satisfiable@ \
-                           Default: %a\
-                           @]"
-         fmt_bool check_props_default
-    )
-  let check_props () = !check_props
 
   let steps_default = 0
   let steps = ref steps_default
@@ -2834,6 +2852,9 @@ let module_map = [
   ) ;
   (ContractMonitor.id,
     (module ContractMonitor: FlagModule)
+  ) ;
+  (SMC.id,
+    (module SMC: FlagModule)
   ) ;
   (QE.id,
     (module QE: FlagModule)
@@ -3413,6 +3434,7 @@ module Global = struct
     | "INVGENREALOS" -> `INVGENREALOS
     | "C2I" -> `C2I
     | "interpreter" -> `Interpreter
+    | "SMC" -> `SMC
     | "contract_monitor" -> `CMonitor
     | "MCS" -> `MCS
     | "CONTRACTCK" -> `CONTRACTCK
@@ -3438,6 +3460,7 @@ module Global = struct
     | `INVGENREALOS -> "INVGENREALOS"
     | `C2I -> "C2I"
     | `Interpreter -> "interpreter"
+    | `SMC -> "SMC"
     | `CMonitor -> "contract_monitor"
     | `MCS -> "MCS"
     | `CONTRACTCK -> "CONTRACTCK"
@@ -3455,7 +3478,7 @@ module Global = struct
     `INVGENINT ; `INVGENINTOS ;
     `INVGENMACH ; `INVGENMACHOS ;
     `INVGENREAL ; `INVGENREALOS ;
-    `C2I ; `Interpreter ; `CMonitor ; `MCS ; `CONTRACTCK
+    `C2I ; `Interpreter ; `SMC ; `CMonitor ; `MCS ; `CONTRACTCK
   ] |> List.map string_of_kind_module
 
   let enable_default_init = []
