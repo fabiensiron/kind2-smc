@@ -1,0 +1,21 @@
+{
+    "occlusion": {
+        "distribution": "bernoulli",
+        "p": 0.01
+    },
+
+    "overrate": {
+        "distribution": "bernoulli",
+        "p": 0.005
+    },
+
+    "ack": {
+        "distribution": "bernoulli",
+        "p": 0.20
+    },
+
+    "flowFault": {
+        "distribution": "bernoulli",
+        "p": 0.01
+    }
+}

@@ -1,0 +1,241 @@
+(* Classical medical infusion model inspired from https://github.com/DabrowskiFr/Kairos *)
+
+node holds_until_release(trigger, hold, clear : bool) returns (ok: bool);
+var init, monitoring, violation, active : bool;
+let
+  init = true -> false;
+  monitoring =
+    false ->
+      (((pre init) or
+       ((pre monitoring) and (not (pre trigger))) or
+       ((pre active) and (pre clear) and (not (pre trigger)))));
+  active =
+    false ->
+      (((pre monitoring) and (pre trigger)) or
+       ((pre active) and ((pre clear) and (pre trigger))) or
+       ((pre active) and ((pre hold) and (not (pre clear)))));
+  violation =
+    false ->
+      (((pre violation) or
+       ((pre active) and (not (pre hold)) and (not (pre clear)))));
+  ok = not (violation or (active and (not hold) and (not clear)));
+tel
+
+const state_init : int = 0;
+const state_idle : int = 1;
+const state_running : int = 2;
+const state_alarmResponse : int = 3;
+const state_alarmLatched : int = 4;
+
+-- from Frederic Dabrowski VSTTE's paper
+node medical_infusion_light(
+  infusionRequested: bool; occlusion: bool;
+  ack: bool; rate: int; delivered: int;
+  maxRate: int; doseLimit: int)
+returns (motorOn: bool; alarmLatched: bool; totalDose: int);
+var
+  -- post
+  motorOn_post : bool; alarmLatched_post : bool; totalDose_post : int;
+  -- predicates
+  hazardActive, admittedAtInit, admittedNow, unexpectedFlow,
+  alarmCondition, initialAlarmCondition, clearAlarm: bool;
+  -- contract predicates
+  admittedAtTickEntry, unexpectedFlowAtTickEntry, doseWouldExceedAtTickEntry,
+  alarmConditionAtTickEntry, clearAlarmAtTickEntry : bool;
+  -- local observer
+  measuredDose : int;
+  -- state
+  next_state, state : int;
+
+  -- props
+  inv1_ok : bool;
+  inv2_ok : bool;
+  inv3_ok : bool;
+  ens1_ok : bool;
+  ens2_ok : bool;
+  ens3_ok : bool;
+  ens4_ok : bool;
+  ens5_ok : bool;
+  ens6_ok : bool;
+  ens7_ok : bool;
+let
+  -- predicates
+  hazardActive = occlusion = true;
+  admittedAtInit =
+    infusionRequested and (not hazardActive) and
+    (rate <= maxRate) and (delivered <= doseLimit);
+  admittedNow = infusionRequested and not alarmLatched and
+    (not hazardActive) and (rate <= maxRate) and (totalDose + delivered <= doseLimit) and
+    (motorOn or delivered = 0);
+  unexpectedFlow = delivered > 0 and not motorOn;
+  alarmCondition = hazardActive or (rate > maxRate) or
+    (totalDose + delivered > doseLimit) or unexpectedFlow;
+  initialAlarmCondition = hazardActive or (rate > maxRate) or (delivered > doseLimit) or
+    ((delivered > 0) and (not admittedAtInit));
+  clearAlarm = (ack = true) and (not alarmCondition);
+
+  -- specification predicates
+  admittedAtTickEntry =
+    infusionRequested and (not (alarmLatched)) and (not hazardActive) and
+    (rate <= maxRate) and ((totalDose) + delivered <= doseLimit) and
+    ((motorOn) or (delivered = 0));
+  unexpectedFlowAtTickEntry =
+    (delivered > 0) and (not motorOn);
+  doseWouldExceedAtTickEntry =
+    (totalDose + delivered) > doseLimit;
+  alarmConditionAtTickEntry =
+    hazardActive or (rate > maxRate) or doseWouldExceedAtTickEntry or
+    unexpectedFlowAtTickEntry;
+  clearAlarmAtTickEntry =
+    (ack = true) and (not alarmConditionAtTickEntry);
+
+  -- local
+  measuredDose = delivered -> ((pre measuredDose) + delivered);
+  -- default
+  totalDose_post =
+    if state = state_init then delivered
+    else if state = state_idle and alarmCondition then totalDose + delivered
+    else if state = state_idle and admittedNow then totalDose + delivered
+    else if state = state_running then totalDose + delivered
+    else if state = state_alarmResponse and alarmCondition then totalDose + delivered
+    else if state = state_alarmLatched and alarmCondition then totalDose + delivered
+    else (pre totalDose_post); -- all states except Init
+  totalDose = delivered -> pre(totalDose_post);
+  motorOn_post =
+    if state = state_init and initialAlarmCondition then false
+    else if state = state_init and admittedAtInit then true
+    else if state = state_init then false
+    else if state = state_idle and alarmCondition then false
+    else if state = state_idle and admittedNow then true
+    else if state = state_running and alarmCondition then false
+    else if state = state_running and admittedNow then (pre motorOn_post)
+    else if state = state_running then false
+    else if state = state_alarmLatched and alarmCondition then (pre motorOn_post)
+    else if state = state_alarmLatched and clearAlarm then false
+    else (pre motorOn_post);
+  motorOn = false -> pre motorOn_post;
+  alarmLatched_post =
+    if state = state_init and initialAlarmCondition then true
+    else if state = state_init and admittedAtInit then false
+    else if state = state_init then false
+    else if state = state_idle and alarmCondition then true
+    else if state = state_idle and admittedNow then false
+    else if state = state_running and alarmCondition then true
+    else if state = state_running and admittedNow then (pre alarmLatched_post)
+    else if state = state_running then false
+    else if state = state_alarmLatched and alarmCondition then (pre alarmLatched_post)
+    else if state = state_alarmLatched and clearAlarm then false
+    else (pre alarmLatched_post);
+  alarmLatched = false -> pre alarmLatched_post;
+  -- automata
+  next_state =
+    if state = state_init and initialAlarmCondition then state_alarmResponse
+    else if state = state_init and admittedAtInit then state_running
+    else if state = state_init then state_idle
+    else if state = state_idle and alarmCondition then state_alarmResponse
+    else if state = state_idle and admittedNow then state_running
+    else if state = state_idle then (pre next_state)
+    else if state = state_running and alarmCondition then state_alarmResponse
+    else if state = state_running and admittedNow then state_running
+    else if state = state_running then state_idle
+    else if state = state_alarmResponse and alarmCondition then state_alarmResponse
+    else if state = state_alarmResponse then state_alarmLatched
+    else if state = state_alarmLatched and alarmCondition then state_alarmResponse
+    else if state = state_alarmLatched and clearAlarm then state_idle
+    else if state = state_alarmLatched then (pre next_state)
+    else (pre next_state);
+  state = state_init -> pre (next_state);
+
+  -- properties
+  inv1_ok =
+    if next_state = state_init then true
+    else totalDose_post = measuredDose;
+  inv2_ok =
+    if next_state = state_init or next_state = state_running then true
+    else motorOn_post = false;
+  inv3_ok =
+    if next_state = state_alarmResponse or next_state = state_alarmLatched then alarmLatched_post = true
+    else true;
+  ens1_ok = (hazardActive or (rate > maxRate)) ==> (alarmLatched_post and (not motorOn_post));
+  ens2_ok = true -> ((doseWouldExceedAtTickEntry) ==> (alarmLatched_post and (not motorOn_post)));
+  ens3_ok = true -> ((unexpectedFlowAtTickEntry) ==> (alarmLatched_post and (not motorOn_post)));
+  ens4_ok = true -> ((alarmLatched_post) ==> (not motorOn_post));
+  ens5_ok = holds_until_release(
+    alarmLatched_post and (not ack),
+    alarmLatched_post and (not motorOn_post),
+    clearAlarmAtTickEntry);
+  ens6_ok = true -> (totalDose_post = measuredDose);
+  ens7_ok = true -> ((motorOn_post) ==> (measuredDose <= doseLimit));
+
+  assert rate >= 0;
+  assert delivered >= 0;
+  assert maxRate >= 0;
+  assert doseLimit >= 0;
+  -- check inv1_ok;
+  -- check inv2_ok;
+  -- check inv3_ok;
+  -- check ens1_ok;
+  -- check ens2_ok;
+  -- check ens3_ok;
+  -- check ens4_ok;
+  -- check ens5_ok;
+  -- check ens6_ok;
+  -- check ens7_ok;
+tel
+
+node medical_infusion_stochastic(
+  occlusion : bool;
+  overrate : bool;
+  ack : bool;
+  flowFault : bool)
+returns (
+  motorOn: bool;
+  alarmLatched: bool;
+  totalDose: int
+);
+var
+infusionRequested : bool;
+rate : int;
+delivered : int;
+
+unexpectedFlow : bool;
+externalHazard : bool;
+nominalEnvironment: bool;
+let
+  infusionRequested = true;
+  rate = if overrate then 120 else 50;
+  delivered = -- if the motor is stopped, P(delivered) = 1% flow fault
+    0 ->
+      if pre motorOn then 1
+      else if flowFault then 1
+      else 0;
+
+  (motorOn, alarmLatched, totalDose) =
+    medical_infusion_light(
+      infusionRequested,
+      occlusion,
+      ack,
+      rate,
+      delivered,
+      100, -- maxRate
+      1000); -- doseLimit);
+  externalHazard = occlusion or overrate;
+  unexpectedFlow = delivered > 0 and not motorOn;
+  nominalEnvironment = not (occlusion or overrate or flowFault);
+
+  -- 1. Did the external environment generate an occlusion or overrate?
+  check "No External Hazard" not externalHazard;
+  -- 2. Did the random environment generate a flow-fault event?
+  check "No Flow Fault" not flowFault;
+  -- 3. Did none of the three injected abnormal environment events occur?
+  check "Nominal Environment" nominalEnvironment;
+  -- 4. Did the controller remain alarm-free throughout the execution?
+  check "Alarm Free" not alarmLatched;
+  -- 5. Was requested infusion uninterrupted?
+  check "Continuous Infusion" true -> motorOn;
+  -- 6. Did the physical/controller interaction ever result in measured
+  --    flow while the motor was off?
+  check "No Unexpected Flow" not unexpectedFlow;
+  --%MAIN;
+
+tel
