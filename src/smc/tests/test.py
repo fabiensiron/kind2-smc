@@ -1,4 +1,5 @@
 import os
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -111,7 +112,7 @@ def probability(output, property_name):
     pattern = (
         rf"Property\s+{re.escape(property_name)}\s*:"
         rf".*?"
-        rf"probability\s*=\s*"
+        rf"Estimate\s*:\s*"
         rf"([0-9.eE+-]+)"
     )
 
@@ -128,6 +129,30 @@ def probability(output, property_name):
 
     return float(match.group(1))
 
+def confidence(output):
+    match = re.search(
+        r"Confidence\s*:\s*>=\s*([0-9.eE+-]+)%",
+        output,
+    )
+
+    assert match is not None, (
+        f"Could not find confidence in output:\n\n{output}"
+    )
+
+    return float(match.group(1)) / 100.0
+
+
+def precision(output):
+    match = re.search(
+        r"Precision\s*:\s*[±+-]?\s*([0-9.eE+-]+)",
+        output,
+    )
+
+    assert match is not None, (
+        f"Could not find precision in output:\n\n{output}"
+    )
+
+    return float(match.group(1))
 
 def sample_counts(output):
     """Extract generated, accepted and rejected sample counts."""
@@ -164,6 +189,9 @@ def assert_close(actual, expected, tolerance):
         f"got {actual:.6f}"
     )
 
+def hoeffding(runs, epsilon):
+    delta = 2.0 * math.exp(-2.0 * runs * epsilon * epsilon)
+    return max(0.0, min(1.0, 1.0 - delta))
 
 # ---------------------------------------------------------------------------
 # Deterministic regression tests
@@ -535,3 +563,43 @@ def test_any_is_solver_completed(steps):
         expected=expected,
         tolerance=0.05,
     )
+
+# ---------------------------------------------------------------------------
+# Estimators regression tests
+# ---------------------------------------------------------------------------
+
+def test_fixed_estimator_confidence():
+    runs = 1000
+    epsilon = 0.05
+    output = run_smc(
+        "boolean.lus",
+        runs=runs,
+        steps=1,
+        params=["--smc_precision", str(epsilon)],
+    )
+
+    expected = hoeffding(runs, epsilon)
+
+    assert_close(
+        confidence(output),
+        expected,
+        tolerance=1e-4
+    )
+    assert_close(
+        precision(output),
+        epsilon,
+        tolerance=1e-12
+    )
+
+def test_fixed_estimator_vacuous_bound():
+    runs = 1000
+    epsilon = 0.01
+
+    output = run_smc(
+        "boolean.lus",
+        runs=runs,
+        steps=1,
+        params=["--smc_precision", str(epsilon)],
+    )
+
+    assert confidence(output) == 0.0

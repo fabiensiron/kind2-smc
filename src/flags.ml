@@ -2670,7 +2670,7 @@ module SMC = struct
         "@[<v>\
           Run number of steps, override the number of steps given in the@ \
           input file@ \
-          Default: %d\
+          Default: %d@ \
         @]"
         steps_default
     )
@@ -2691,7 +2691,7 @@ module SMC = struct
   let seed () = !seed
 
 
-  let precision_default = 0.01
+  let precision_default = 0.05
   let precision = ref precision_default
   let _ = add_spec
     "--smc_precision"
@@ -2699,8 +2699,10 @@ module SMC = struct
     (fun fmt ->
        Format.fprintf fmt
          "@[<v>\
-          Precision of confidence estimation
+          Precision of confidence estimation@ \
+          Default: %g@ \
         @]"
+        precision_default
     )
   let precision () = !precision
 
