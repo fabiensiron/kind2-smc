@@ -201,6 +201,163 @@ def apmc_runs(precision, confidence):
         / (2.0 * precision * precision)
     )
 
+def property_block(output, property_name):
+    """Extract the report block corresponding to one property."""
+
+    start = re.search(
+        rf"Property\s+{re.escape(property_name)}\s*:",
+        output,
+    )
+
+    assert start is not None, (
+        f"Could not find property {property_name!r} "
+        f"in output:\n\n{output}"
+    )
+
+    remaining = output[start.end():]
+
+    next_property = re.search(
+        r"\n\s*Property\s+[^:\n]+\s*:",
+        remaining,
+    )
+
+    if next_property is None:
+        end = len(output)
+    else:
+        end = (
+            start.end()
+            + next_property.start()
+        )
+
+    return output[start.start():end]
+
+
+
+def property_violation_counts(output, property_name):
+    """Return (violations, samples) for one property."""
+
+    block = property_block(
+        output,
+        property_name,
+    )
+
+    match = re.search(
+        r"Violations\s*:\s*(\d+)\s*/\s*(\d+)",
+        block,
+    )
+
+    assert match is not None, (
+        f"Could not find violation counts for "
+        f"{property_name!r} in:\n\n{block}"
+    )
+
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+    )
+
+
+def sprt_decision(output, property_name):
+    """Extract the textual SPRT decision."""
+
+    block = property_block(
+        output,
+        property_name,
+    )
+
+    match = re.search(
+        r"Decision\s*:\s*([^\r\n]+)",
+        block,
+    )
+
+    assert match is not None, (
+        f"Could not find SPRT decision for "
+        f"{property_name!r} in:\n\n{block}"
+    )
+
+    return match.group(1).strip()
+
+
+def sprt_log_lr(output, property_name):
+    """Extract the final SPRT log likelihood ratio."""
+
+    block = property_block(
+        output,
+        property_name,
+    )
+
+    match = re.search(
+        r"Log LR\s*:\s*([0-9.eE+-]+)",
+        block,
+    )
+
+    assert match is not None, (
+        f"Could not find SPRT log likelihood ratio for "
+        f"{property_name!r} in:\n\n{block}"
+    )
+
+    return float(match.group(1))
+
+def sprt_parameters(threshold, delta, alpha, beta):
+    p_low = threshold - delta
+    p_high = threshold + delta
+
+    lower_bound = math.log(
+        beta / (1.0 - alpha)
+    )
+
+    upper_bound = math.log(
+        (1.0 - beta) / alpha
+    )
+
+    return (
+        p_low,
+        p_high,
+        lower_bound,
+        upper_bound,
+    )
+
+
+def sprt_constant_stopping_samples(
+    *,
+    violation,
+    threshold,
+    delta,
+    alpha,
+    beta,
+):
+    """Exact stopping time for an all-true or all-false observation stream."""
+
+    (
+        p_low,
+        p_high,
+        lower_bound,
+        upper_bound,
+    ) = sprt_parameters(
+        threshold,
+        delta,
+        alpha,
+        beta,
+    )
+
+    if violation:
+        increment = math.log(
+            p_high / p_low
+        )
+
+        return math.ceil(
+            upper_bound / increment
+        )
+
+    increment = math.log(
+        (1.0 - p_high)
+        / (1.0 - p_low)
+    )
+
+    return math.ceil(
+        lower_bound / increment
+    )
+
 # ---------------------------------------------------------------------------
 # Deterministic regression tests
 # ---------------------------------------------------------------------------
@@ -724,3 +881,215 @@ def test_fixed_and_uniform_input(tmp_path):
         expected=0.5,
         tolerance=0.05,
     )
+
+def test_sprt_boundaries_and_early_stopping(tmp_path):
+    threshold = 0.10
+    delta = 0.02
+    alpha = 0.05
+    beta = 0.05
+
+    input_file = tmp_path / "sprt_fixed.json"
+
+    input_file.write_text(
+"""
+{
+  "low_fault": false,
+  "high_fault": true
+}
+"""
+    )
+
+    output = run_smc(
+        "sprt.lus",
+        runs=1000,
+        steps=1,
+        params=[
+            "--smc_estimator", "sprt",
+            "--smc_threshold", str(threshold),
+            "--smc_delta", str(delta),
+            "--smc_alpha", str(alpha),
+            "--smc_beta", str(beta),
+            "--smc_input", str(input_file),
+        ],
+    )
+
+    (p_low, p_high, lower_bound, upper_bound) = sprt_parameters(threshold, delta, alpha, beta)
+
+    expected_low_samples = (
+        sprt_constant_stopping_samples(
+            violation=False,
+            threshold=threshold,
+            delta=delta,
+            alpha=alpha,
+            beta=beta,
+        )
+    )
+
+    expected_high_samples = (
+        sprt_constant_stopping_samples(
+            violation=True,
+            threshold=threshold,
+            delta=delta,
+            alpha=alpha,
+            beta=beta,
+        )
+    )
+
+    # With these parameters:
+    #
+    #   H_low  : P(violation) <= 0.08
+    #   H_high : P(violation) >= 0.12
+    #
+    # An always-violated property reaches H_high after 8 samples.
+    # A never-violated property reaches H_low after 67 samples.
+    assert expected_high_samples == 8
+    assert expected_low_samples == 67
+
+    low_violations, low_samples = (
+        property_violation_counts(
+            output,
+            "low_probability",
+        )
+    )
+
+    high_violations, high_samples = (
+        property_violation_counts(
+            output,
+            "high_probability",
+        )
+    )
+
+    # low_fault is fixed to false:
+    # low_probability is never violated.
+    assert low_violations == 0
+    assert low_samples == expected_low_samples
+
+    # high_fault is fixed to true:
+    # high_probability is violated on every sample.
+    assert high_violations == high_samples
+    assert high_samples == expected_high_samples
+
+    # The two estimators must stop independently.
+    #
+    # In particular, high_probability must stop receiving observations
+    # after sample 8 even though the global SMC loop continues until
+    # low_probability terminates at sample 67.
+    assert high_samples < low_samples
+
+    assert sprt_decision(
+        output,
+        "low_probability",
+    ) == f"P(violation) <= {p_low:g}"
+
+    assert sprt_decision(
+        output,
+        "high_probability",
+    ) == f"P(violation) >= {p_high:g}"
+
+    # Check that the reported likelihood ratios actually crossed
+    # the expected Wald boundaries.
+    assert (
+        sprt_log_lr(
+            output,
+            "low_probability",
+        )
+        <= lower_bound
+    )
+
+    assert (
+        sprt_log_lr(
+            output,
+            "high_probability",
+        )
+        >= upper_bound
+    )
+
+    generated, accepted, rejected = (
+        sample_counts(output)
+    )
+
+    # The global run continues until the slowest property estimator
+    # terminates.
+    assert accepted == expected_low_samples
+    assert generated == accepted
+    assert rejected == 0
+
+def test_sprt_inconclusive_at_max_runs(tmp_path):
+    threshold = 0.10
+    delta = 0.02
+    alpha = 0.05
+    beta = 0.05
+
+    # Five samples are insufficient to reach either boundary:
+    #
+    #   always violated: upper boundary needs 8
+    #   never violated : lower boundary needs 67
+    #
+    max_runs = 5
+
+    input_file = tmp_path / "sprt_fixed.json"
+
+    input_file.write_text(
+"""
+{
+  "low_fault": false,
+  "high_fault": true
+}
+"""
+    )
+
+    output = run_smc(
+        "sprt.lus",
+        runs=max_runs,
+        steps=1,
+        params=[
+            "--smc_estimator", "sprt",
+            "--smc_threshold", str(threshold),
+            "--smc_delta", str(delta),
+            "--smc_alpha", str(alpha),
+            "--smc_beta", str(beta),
+            "--smc_input", str(input_file),
+        ],
+    )
+
+    low_violations, low_samples = (
+        property_violation_counts(
+            output,
+            "low_probability",
+        )
+    )
+
+    high_violations, high_samples = (
+        property_violation_counts(
+            output,
+            "high_probability",
+        )
+    )
+
+    assert low_samples == max_runs
+    assert high_samples == max_runs
+
+    assert low_violations == 0
+    assert high_violations == max_runs
+
+    assert sprt_decision(output, "low_probability", ) == "Inconclusive"
+
+    assert sprt_decision(output, "high_probability", ) == "Inconclusive"
+
+    (_p_low, _p_high, lower_bound, upper_bound,) = sprt_parameters(threshold, delta, alpha, beta,)
+
+    low_lr = sprt_log_lr(output, "low_probability", )
+
+    high_lr = sprt_log_lr(output, "high_probability", )
+
+    # Neither test has crossed a decision boundary.
+    assert lower_bound < low_lr < upper_bound
+    assert lower_bound < high_lr < upper_bound
+
+    generated, accepted, rejected = (
+        sample_counts(output)
+    )
+
+    assert generated == max_runs
+    assert accepted == max_runs
+    assert rejected == 0

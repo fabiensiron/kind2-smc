@@ -1,0 +1,18 @@
+node main(
+  low_fault  : bool;
+  high_fault : bool
+) returns ();
+
+let
+
+  -- Never violated when low_fault is fixed to false.
+  check "low_probability"
+    not low_fault;
+
+  -- Always violated when high_fault is fixed to true.
+  check "high_probability"
+    not high_fault;
+
+  --%MAIN;
+
+tel

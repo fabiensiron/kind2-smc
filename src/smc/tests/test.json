@@ -1,0 +1,16 @@
+{
+  "b": {
+    "distribution": "bernoulli",
+    "p": 0.2
+  },
+  "i": {
+    "distribution": "uniform_int",
+    "min": "-2",
+    "max": "-1"
+  },
+  "r": {
+    "distribution": "uniform_real",
+    "min": "-1.0",
+    "max": "1.0"
+  }
+}
