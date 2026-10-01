@@ -130,11 +130,10 @@ let pp_violations fmt n =
     Format.fprintf fmt "@{<red_b>%d@}" n
 
 let pp_estimator_pt fmt config =
-  let runs = SmcEstimator.runs config in
-  let precision = SmcEstimator.precision config in
-  let confidence = SmcEstimator.confidence config in
   match config with
-  | SmcEstimator.Fixed _ ->
+  | SmcEstimator.Fixed { runs ; precision } ->
+    let confidence = SmcEstimator.confidence config in
+
     Format.fprintf fmt
       "@[<v>\
        @{<b>Estimator@}@,\
@@ -144,7 +143,8 @@ let pp_estimator_pt fmt config =
        @[<h>  Confidence : @{<b>>= %.4f%%@}@]\
        @]@,"
       runs precision (100.0 *. confidence)
-  | SmcEstimator.Apmc _ ->
+  | SmcEstimator.Apmc { runs ; precision ; confidence } ->
+
     Format.fprintf fmt
       "@[<v>\
        @{<b>Estimator@}@,\
@@ -156,8 +156,31 @@ let pp_estimator_pt fmt config =
       runs
       precision
       (100.0 *. confidence)
+  | SmcEstimator.Sprt { max_runs ; threshold ; delta ; alpha ; beta } ->
 
-let pp_property_pt precision fmt (name, estimate) =
+    let p_low = threshold -. delta in
+    let p_high = threshold +. delta in
+
+    Format.fprintf fmt
+      "@[<v>\
+       @{<b>Estimator@}@,\
+       @[<h>  Method              : SPRT@]@,\
+       @[<h>  Event               : property violation@]@,\
+       @[<h>  Threshold           : %.6g@]@,\
+       @[<h>  Indifference region : [%.6g, %.6g]@]@,\
+       @[<h>  Alpha               : %.6g@]@,\
+       @[<h>  Beta                : %.6g@]@,\
+       @[<h>  Max runs            : %d@]\
+       @]"
+      threshold
+      p_low
+      p_high
+      alpha
+      beta
+      max_runs
+
+
+let pp_estimation_property_pt precision fmt (name, estimate) =
   let lower = max 0.0 (estimate.SmcEstimator.probability -. precision) in
   let upper = min 1.0 (estimate.SmcEstimator.probability +. precision) in
 
@@ -176,8 +199,81 @@ let pp_property_pt precision fmt (name, estimate) =
     lower
     upper
 
+
+let pp_sprt_decision_pt p_low p_high fmt result =
+  match result with
+  | SmcEstimator.Below ->
+    Format.fprintf fmt
+      "@{<green_b>P(violation) <= %.6g@}"
+      p_low
+
+  | SmcEstimator.Above ->
+    Format.fprintf fmt
+      "@{<red_b>P(violation) >= %.6g@}"
+      p_high
+
+  | SmcEstimator.Inconclusive ->
+    Format.fprintf fmt
+      "@{<yellow_b>Inconclusive@}"
+
+
+let pp_sprt_property_pt p_low p_high fmt (name, result) =
+
+  let decision, log_likelihood_ratio =
+    match result.SmcEstimator.method_result with
+    | SmcEstimator.SprtResult {
+        decision ;
+        log_likelihood_ratio ;
+      } ->
+      decision, log_likelihood_ratio
+
+    | SmcEstimator.Estimate ->
+      invalid_arg
+        "SmcReport.pp_sprt_property: \
+         expected an SPRT result"
+  in
+
+  Format.fprintf fmt
+    "@[<v 2>\
+     @[<h>  Property @{<blue_b>%s@}:@]@,\
+     @[<h>    Violations   : %a / %d@]@,\
+     @[<h>    Observed rate: %a@]@,\
+     @[<h>    Decision     : %a@]@,\
+     @[<h>    Log LR       : %.6g@]\
+     @]"
+    name
+    pp_violations
+    result.SmcEstimator.violations
+    result.SmcEstimator.samples
+    pp_probability
+    result.SmcEstimator.probability
+    (pp_sprt_decision_pt p_low p_high)
+    decision
+    log_likelihood_ratio
+
+
+let pp_property_pt config fmt property =
+
+  match config with
+  | SmcEstimator.Fixed { precision ; _ ; }
+  | SmcEstimator.Apmc { precision ; _ ; } ->
+
+    pp_estimation_property_pt precision fmt property
+
+  | SmcEstimator.Sprt { threshold ; delta ; _ ; } ->
+
+    let p_low = threshold -. delta in
+    let p_high = threshold +. delta in
+
+    pp_sprt_property_pt p_low p_high fmt property
+
 let pp_pt fmt config estimates result =
-  let precision = SmcEstimator.precision config in
+  let property_heading =
+    match config with
+    | SmcEstimator.Sprt _ -> "Property tests"
+    | SmcEstimator.Fixed _
+    | SmcEstimator.Apmc _ -> "Property estimates"
+  in
   Format.fprintf fmt
     "@[<v>\
     %a\
@@ -191,21 +287,24 @@ let pp_pt fmt config estimates result =
     @[<h>  Accepted  : @{<green_b>%d@}@]@,\
     @[<h>  Rejected  : @{<yellow_b>%d@}@]@,\
     @,\
-    @{<b>Property estimates@}"
+    @{<b>%s@}"
     Pretty.print_line ()
     Pretty.print_line ()
     pp_estimator_pt config
     result.generated
     result.accepted
-    result.rejected;
+    result.rejected
+    property_heading;
+
   if estimates <> [] then
     Format.fprintf fmt
       "@,%a"
       (Format.pp_print_list
          ~pp_sep:(fun fmt () -> Format.fprintf fmt "@,")
-         (pp_property_pt precision) )
+         (pp_property_pt config) )
       estimates;
   Format.fprintf fmt "@,@,@]"
+
 
 let pp_xml = pp_pt (* TODO *)
 let pp_json = pp_pt (* TODO *)

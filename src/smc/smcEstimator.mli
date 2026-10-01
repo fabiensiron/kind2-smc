@@ -28,6 +28,27 @@ type config =
       precision : float ;
       confidence : float ;
     }
+  | Sprt of {
+      max_runs : int ;
+      threshold : float ;
+      delta : float ;
+      alpha : float ;
+      beta : float ;
+    }
+
+(* estimator-specific results *)
+
+type sprt_decision =
+  | Below
+  | Above
+  | Inconclusive
+
+type method_result =
+  | Estimate
+  | SprtResult of {
+      decision : sprt_decision ;
+      log_likelihood_ratio : float ;
+    }
 
 (* mutable state *)
 type t
@@ -36,6 +57,7 @@ type result = {
   samples : int ;
   violations : int ;
   probability : float ;
+  method_result : method_result ;
 }
 
 (** Build the estimator for fixed runs *)
@@ -43,6 +65,11 @@ val make_fixed : runs:int -> precision:float -> config
 
 (** Build the estimator for APMC *)
 val make_apmc : precision:float -> confidence:float -> config
+
+(** Build the estimator for SPRT property testing *)
+val make_sprt :
+  max_runs:int -> threshold:float -> delta:float -> alpha:float ->
+  beta:float -> config
 
 (** Build the estimator state (per property) *)
 val create : unit -> t
@@ -54,7 +81,7 @@ val observe : config -> t -> violation:bool -> unit
 val finished : config -> t -> bool
 
 (** Return the final estimat. *)
-val result : t -> result
+val result : config -> t -> result
 
 (** Compute how many runs are necessary. *)
 val runs : config -> int
@@ -67,3 +94,8 @@ val precision : config -> float
 
 (** Compute runs for APMC *)
 val apmc_runs : precision:float -> confidence:float -> int
+
+(** Current SPRT log-likelihood ratio *)
+val sprt_log_likelihood_ratio : config -> t -> float
+
+val sprt_decision : config -> t -> sprt_decision option
