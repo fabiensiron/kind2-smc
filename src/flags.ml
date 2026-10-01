@@ -2690,10 +2690,11 @@ module SMC = struct
       )
   let seed () = !seed
 
-  type estimator_mode = [ `FIXED | `APMC ]
+  type estimator_mode = [ `FIXED | `APMC | `SPRT ]
   let estimator_of_string = function
     | "apmc" -> `APMC
     | "fixed" -> `FIXED
+    | "sprt" -> `SPRT
     | unexpected -> Arg.Bad (
         Format.sprintf "Unexpected value \"%s\" for flags --smc_estimator" unexpected
       ) |> raise
@@ -2705,8 +2706,8 @@ module SMC = struct
     (fun fmt ->
        Format.fprintf fmt
          "@[<v>\
-          where <string> can be 'direct' or 'apmc'@ \
-          Define the estimator mode.@ \
+          where <string> can be 'direct', 'apmc' or 'sprt'@ \
+          Define the statistical estimator or hypothesis-test mode.@ \
           Default: fixed@ \
           @]"
     )
@@ -2764,6 +2765,84 @@ module SMC = struct
            confidence_default
       )
   let confidence () = !confidence
+
+
+    (* SPRT threshold.
+
+     This is deliberately optional because there is no meaningful generic
+     default threshold. It is mandatory when --smc_estimator sprt is used.
+  *)
+  let threshold = ref None
+
+  let _ = add_spec
+    "--smc_threshold"
+    (Arg.Float
+       (fun value ->
+          threshold := Some value))
+    (fun fmt ->
+       Format.fprintf fmt
+         "@[<v>\
+          Probability threshold for SPRT.@ \
+          The tested event is property violation.@ \
+          Required when --smc_estimator sprt is selected.\
+          @]"
+    )
+
+  let threshold () = !threshold
+
+  let delta_default = 0.01
+  let delta = ref delta_default
+
+  let _ = add_spec
+    "--smc_delta"
+    (Arg.Set_float delta)
+    (fun fmt ->
+       Format.fprintf fmt
+         "@[<v>\
+          Half-width of the SPRT indifference region.@ \
+          Hypotheses are separated at threshold-delta and threshold+delta.@ \
+          Default: %g\
+          @]"
+         delta_default
+    )
+
+  let delta () = !delta
+
+
+  let alpha_default = 0.05
+  let alpha = ref alpha_default
+
+  let _ = add_spec
+    "--smc_alpha"
+    (Arg.Set_float alpha)
+    (fun fmt ->
+       Format.fprintf fmt
+         "@[<v>\
+          SPRT type-I error bound.@ \
+          Default: %g\
+          @]"
+         alpha_default
+    )
+
+  let alpha () = !alpha
+
+
+  let beta_default = 0.05
+  let beta = ref beta_default
+
+  let _ = add_spec
+    "--smc_beta"
+    (Arg.Set_float beta)
+    (fun fmt ->
+       Format.fprintf fmt
+         "@[<v>\
+          SPRT type-II error bound.@ \
+          Default: %g\
+          @]"
+         beta_default
+    )
+
+  let beta () = !beta
 
   let runs_default = 10
   let runs = ref runs_default
