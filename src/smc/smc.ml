@@ -329,8 +329,26 @@ let violations_of_values props values =
 
 let make_estimator_config ~runs ~precision ~confidence =
   match Flags.SMC.estimator () with
-  | `FIXED -> Estimator.make_fixed ~runs ~precision
-  | `APMC -> Estimator.make_apmc ~precision ~confidence
+  | `FIXED ->
+    Estimator.make_fixed ~runs ~precision
+  | `APMC ->
+    Estimator.make_apmc ~precision ~confidence
+  | `SPRT ->
+    begin
+      match Flags.SMC.threshold () with
+      | None ->
+        KEvent.log
+          L_error
+          "SMC: --smc_threshold is required when SPRT mode is selected";
+        raise (Failure "main")
+      | Some threshold ->
+        Estimator.make_sprt
+          ~max_runs:runs
+          ~threshold
+          ~delta:(Flags.SMC.delta ())
+          ~alpha:(Flags.SMC.alpha ())
+          ~beta:(Flags.SMC.beta ())
+    end
 
 
 let build_estimators properties =
@@ -368,13 +386,13 @@ let estimators_finished config estimators =
     estimators
 
 
-let estimators_results estimators : (string * Estimator.result) list =
+let estimators_results config estimators : (string * Estimator.result) list =
   estimators
   |> Smap.bindings
   |> List.map
     (fun (name, estimator) ->
        name,
-       Estimator.result estimator)
+       Estimator.result config estimator)
 
 
 (* -------------------------------------------------------------------------- *)
@@ -572,8 +590,6 @@ let main  input_sys _ trans_sys =
       raise (Failure "main")
     end;
 
-  KEvent.log L_info "SMC: %d runs of %d steps" runs steps;
-
   let precision = Flags.SMC.precision () in
   let confidence = Flags.SMC.confidence () in
 
@@ -583,6 +599,22 @@ let main  input_sys _ trans_sys =
       ~precision
       ~confidence
   in
+
+  begin
+    match estimator_config with
+    | Estimator.Sprt _ ->
+      KEvent.log
+        L_info
+        "SMC: up to %d accepted runs of %d steps"
+        (Estimator.runs estimator_config)
+        steps
+    | _ ->
+      KEvent.log
+        L_info
+        "SMC: %d runs of %d steps"
+        (Estimator.runs estimator_config)
+        steps
+  end;
 
   let last_instant = steps - 1 in
 
@@ -657,7 +689,7 @@ let main  input_sys _ trans_sys =
   !statistics
   |> Report.render
     ~config:estimator_config
-    ~estimates:(estimators_results estimators)
+    ~estimates:(estimators_results estimator_config estimators)
   |> KEvent.result
 
 (*

@@ -812,7 +812,7 @@ end
 (** {2 SMC flags} *)
 module SMC : sig
 
-  type estimator_mode = [ `FIXED | `APMC ]
+  type estimator_mode = [ `FIXED | `APMC | `SPRT ]
   type solver_mode = [ `INCREMENTAL | `ONESHOT ]
 
   (** Input file containing distributions *)
@@ -835,6 +835,18 @@ module SMC : sig
 
   (** Confidence of the estimation. *)
   val confidence : unit -> float
+
+  (** SPRT probability threshold. *)
+  val threshold : unit -> float option
+
+  (** Half-width of the SPRT indifference region. *)
+  val delta : unit -> float
+
+  (** SPRT type-I error bound. *)
+  val alpha : unit -> float
+
+  (** SPRT type-II error bound. *)
+  val beta : unit -> float
 
   (** Number of independant random runs. *)
   val runs : unit -> int
