@@ -147,6 +147,62 @@ kind2 --enable SMC \
   model.lus
 ```
 
+### SPRT property testing
+
+SPRT performs a sequential hypothesis test on the property violation
+probability.
+
+It can be enabled using:
+
+```sh
+--smc_estimator sprt
+```
+
+The following options are available:
+
+```text
+--smc_threshold <float>
+--smc_delta <float>
+--smc_alpha <float>
+--smc_beta <float>
+```
+
+For a threshold \(\theta\) and an indifference parameter \(\delta\), SPRT
+tests:
+
+\[
+P(\mathrm{violation}) \le \theta - \delta
+\]
+
+against:
+
+\[
+P(\mathrm{violation}) \ge \theta + \delta.
+\]
+
+`--smc_alpha` and `--smc_beta` specify the two error bounds.
+
+`--smc_runs` specifies the maximum number of accepted samples. If neither
+hypothesis is accepted before this limit, the result is reported as
+`Inconclusive`.
+
+Example:
+
+```sh
+kind2 --enable SMC \
+  --smc_estimator sprt \
+  --smc_runs 10000 \
+  --smc_steps 20 \
+  --smc_threshold 0.10 \
+  --smc_delta 0.02 \
+  --smc_alpha 0.05 \
+  --smc_beta 0.05 \
+  model.lus
+```
+
+This tests whether the bounded violation probability is below `0.08` or
+above `0.12`.
+
 ## Current features
 
 - fixed-sample Monte Carlo estimation with Hoeffding bounds
@@ -170,6 +226,7 @@ or:
 ```
 
 Their relative performance is model dependent.
+
 
 ## Limitations
 
